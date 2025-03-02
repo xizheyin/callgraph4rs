@@ -2,8 +2,6 @@ use clap::Parser;
 use owo_colors::OwoColorize;
 use rustc_driver::Compilation;
 use rustc_interface::{interface, Queries};
-use rustc_middle::mir::visit::{NonMutatingUseContext, PlaceContext, TyContext, Visitor};
-use rustc_middle::mir::{Body, Location, PlaceElem, PlaceRef, ProjectionElem};
 use rustc_middle::ty::{TyCtxt, TyKind};
 use std::borrow::Cow;
 use std::env;
@@ -11,7 +9,7 @@ use std::process::Command;
 use std::str;
 
 use crate::args::{AllCliArgs, CGArgs};
-use crate::ccg::{self, output_dependencies_to_target, render_dependencies};
+use crate::ccg::{self, output_dependencies_to_target};
 use crate::context::Context;
 use rustc_compat::{CrateFilter, Plugin, RustcPluginArgs, Utf8Path};
 
@@ -72,9 +70,9 @@ impl CGCallbacks {
     }
 
     /// print
-    fn print_basic(&mut self, context: &mut Context) {
+    fn _print_basic(&mut self, context: &mut Context) {
         let tcx: TyCtxt<'_> = context.tcx;
-        for (did, name) in &context.all_generic_funcs_did_sym_map {
+        for (did, name) in &context._all_generic_funcs_did_sym_map {
             // 打印模块名
 
             let module_name = tcx.def_path(*did).to_string_no_crate_verbose();

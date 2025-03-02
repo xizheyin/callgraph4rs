@@ -1,16 +1,14 @@
 /// Extract relationship between all the locals in a function
 use bit_vec::BitVec;
-use itertools::Itertools;
 use rustc_hir::def;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_index::IndexVec;
 use rustc_middle::mir;
 use rustc_middle::mir::Const;
-use rustc_middle::mir::Local;
 use rustc_middle::mir::Terminator;
 use rustc_middle::mir::TerminatorKind;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, Ty};
 use rustc_span::source_map::Spanned;
 use rustc_span::symbol::Symbol;
 use std::collections::hash_map::Entry;
@@ -144,7 +142,7 @@ impl<'tcx> Dependencies<'tcx> {
                     ThreadLocalRef(_) => {
                         () // TODO:add support to threadlocal
                     }
-                    BinaryOp(op, ops) => {
+                    BinaryOp(_, ops) => {
                         let (op1, op2) = (&ops.0, &ops.1);
                         dependencies[lvalue].set(get_id(op1), true);
                         dependencies[lvalue].set(get_id(op2), true);
@@ -157,7 +155,7 @@ impl<'tcx> Dependencies<'tcx> {
                             dependencies[lvalue].set(get_id(op), true);
                         }
                     }
-                    ShallowInitBox(operand, ty) => {
+                    ShallowInitBox(operand, _) => {
                         dependencies[lvalue].set(get_id(operand), true);
                     }
                     CopyForDeref(place) => {
@@ -289,7 +287,7 @@ impl<'tcx> Dependencies<'tcx> {
 }
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone, Hash)]
-struct Module(String);
+struct _Module(String);
 
 // impl Module {
 //     pub fn is_empty(&self) -> bool {
@@ -297,7 +295,7 @@ struct Module(String);
 //     }
 // }
 
-impl fmt::Display for Module {
+impl fmt::Display for _Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -434,21 +432,28 @@ fn extract_constant<'tcx>(function: &mir::Body<'tcx>) -> HashSet<Const<'tcx>> {
 fn extract_function_call<'tcx>(
     tcx: ty::TyCtxt<'tcx>,
     function: &mir::Body<'tcx>,
+    caller_id: &DefId,
 ) -> Vec<CallSite<'tcx>> {
     use mir::visit::Visitor;
 
     #[derive(Clone)]
     struct SearchFunctionCall<'tcx, 'local> {
         tcx: ty::TyCtxt<'tcx>,
-        caller: &'local mir::Body<'tcx>,
+        _caller: &'local mir::Body<'tcx>,
+        caller_id: &'local DefId,
         callees: Vec<CallSite<'tcx>>,
     }
 
     impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
-        fn new(tcx: ty::TyCtxt<'tcx>, caller: &'local mir::Body<'tcx>) -> Self {
+        fn new(
+            tcx: ty::TyCtxt<'tcx>,
+            caller: &'local mir::Body<'tcx>,
+            caller_id: &'local DefId,
+        ) -> Self {
             SearchFunctionCall {
                 tcx,
-                caller,
+                _caller: caller,
+                caller_id,
                 callees: Vec::default(),
             }
         }
@@ -466,19 +471,33 @@ fn extract_function_call<'tcx>(
                 use mir::Operand::*;
                 let function = match func {
                     Constant(cst) => {
-                        if let ty::TyKind::FnDef(def_id, _) = cst.const_.ty().kind() {
+                        if let ty::TyKind::FnDef(def_id, args) = cst.const_.ty().kind() {
                             let def_id = *def_id;
-
+                            let param_env = self.tcx.param_env(self.caller_id);
                             match self.tcx.def_kind(def_id) {
                                 def::DefKind::Fn | def::DefKind::AssocFn => {
-                                    LocalCallType::DirectCall(def_id)
+                                    // Check if this is a trait method call and resolve to the actual implementation
+                                    if let Ok(Some(instance)) =
+                                        ty::Instance::try_resolve(self.tcx, param_env, def_id, args)
+                                    {
+                                        // Use the actual implementation's DefId if resolved
+                                        if let rustc_middle::ty::InstanceKind::Item(impl_def_id) =
+                                            instance.def
+                                        {
+                                            LocalCallType::DirectCall(impl_def_id)
+                                        } else {
+                                            LocalCallType::DirectCall(def_id)
+                                        }
+                                    } else {
+                                        LocalCallType::DirectCall(def_id)
+                                    }
                                 }
                                 other => {
-                                    panic!("internal error: unknow call type: {:?}", other);
+                                    panic!("internal error: unknown call type: {:?}", other);
                                 }
                             }
                         } else {
-                            panic!("internal error: unknow call type: {:?}", cst);
+                            panic!("internal error: unknown call type: {:?}", cst);
                         }
                     }
                     Move(place) | Copy(place) => LocalCallType::LocalFunctionPtr(place.local),
@@ -492,7 +511,7 @@ fn extract_function_call<'tcx>(
         }
     }
 
-    let mut search_callees = SearchFunctionCall::new(tcx, &function);
+    let mut search_callees = SearchFunctionCall::new(tcx, &function, caller_id);
     search_callees.visit_body(&function);
     search_callees.callees
 }
@@ -535,6 +554,7 @@ pub fn extract_dependencies<'tcx>(tcx: ty::TyCtxt<'tcx>) -> AllDependencies<'tcx
             _ => continue,
         }
 
+        let id = function.to_def_id();
         let mir = tcx.optimized_mir(function);
 
         let caller = function.to_def_id();
@@ -544,7 +564,7 @@ pub fn extract_dependencies<'tcx>(tcx: ty::TyCtxt<'tcx>) -> AllDependencies<'tcx
 
         let deps = Dependencies::direct_dependencies(&mir).propagate();
 
-        let callsites: Vec<CallSite<'_>> = extract_function_call(tcx, &mir);
+        let callsites: Vec<CallSite<'_>> = extract_function_call(tcx, &mir, &id);
 
         // The source of all locals, are:
         //  - the arguments to the current function
@@ -792,6 +812,12 @@ pub fn render_dependencies<'tcx, W: std::io::Write>(
                         };
 
                         let callee_name = tcx.def_path_str(*callee);
+
+                        println!(
+                            "DirectCall: caller_name: {}, callee_name: {}",
+                            caller_name, callee_name
+                        );
+
                         writeln!(
                             output,
                             "    \"{}\" -> \"{}\" [ color=black arrowhead=empty style={} ]",
@@ -807,6 +833,10 @@ pub fn render_dependencies<'tcx, W: std::io::Write>(
                                 // FIXME: possible duplicate edges if multiple function pointers
                                 // point to the same function
                                 let callee_name = print_const(callee, tcx);
+                                println!(
+                                    "LocalFunctionPtr: caller_name: {}, callee_name: {}",
+                                    caller_name, callee_name
+                                );
 
                                 // FIXME: detect if the callee could be an external function
                                 let style =
