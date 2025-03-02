@@ -229,7 +229,7 @@ fn only_run_on_file(
     }
 
     // 设置环境变量，指定特定的 crate 和目标
-    cmd.env(SPECIFIC_CRATE, &pkg.name.replace('-', "_"));
+    cmd.env(SPECIFIC_CRATE, pkg.name.replace('-', "_"));
     cmd.env(SPECIFIC_TARGET, kind_str);
 
     tracing::debug!(

@@ -9,6 +9,7 @@ use std::process::Command;
 use std::str;
 
 use crate::args::{AllCliArgs, CGArgs};
+use crate::callgraph;
 use crate::ccg::{self, output_dependencies_to_target};
 use crate::context::Context;
 use rustc_compat::{CrateFilter, Plugin, RustcPluginArgs, Utf8Path};
@@ -135,6 +136,12 @@ impl rustc_driver::Callbacks for CGCallbacks {
 
             let all_dependencies = ccg::extract_dependencies(context.tcx);
             let _ = output_dependencies_to_target(tcx, all_dependencies);
+            // let mono = tcx.collect_and_partition_mono_items(());
+            // println!("mono: {:#?}", mono);
+            let generic_instances = callgraph::collect_generic_instances(tcx);
+            println!("generic_instances: {:#?}", generic_instances);
+            let call_graph = callgraph::perform_mono_analysis(tcx, generic_instances);
+            println!("call_graph: {:#?}", call_graph.call_sites);
         });
         tracing::info!("{}", "Exiting after_analysis callback".red());
         Compilation::Continue

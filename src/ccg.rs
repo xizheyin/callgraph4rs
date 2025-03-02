@@ -140,7 +140,7 @@ impl<'tcx> Dependencies<'tcx> {
                         dependencies[lvalue].set(place.local.as_usize(), true);
                     }
                     ThreadLocalRef(_) => {
-                        () // TODO:add support to threadlocal
+                        // TODO:add support to threadlocal
                     }
                     BinaryOp(_, ops) => {
                         let (op1, op2) = (&ops.0, &ops.1);
@@ -148,7 +148,7 @@ impl<'tcx> Dependencies<'tcx> {
                         dependencies[lvalue].set(get_id(op2), true);
                     }
                     NullaryOp(_, _) => {
-                        () // no dependencies
+                        // no dependencies
                     }
                     Aggregate(_, ops) => {
                         for op in ops {
@@ -338,7 +338,7 @@ impl fmt::Display for _Module {
 
 /// Target of a function call
 #[derive(Clone, Debug)]
-enum LocalCallType {
+pub enum LocalCallType {
     DirectCall(DefId),
     LocalFunctionPtr(mir::Local),
 }
@@ -511,7 +511,7 @@ fn extract_function_call<'tcx>(
         }
     }
 
-    let mut search_callees = SearchFunctionCall::new(tcx, &function, caller_id);
+    let mut search_callees = SearchFunctionCall::new(tcx, function, caller_id);
     search_callees.visit_body(&function);
     search_callees.callees
 }

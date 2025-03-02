@@ -5,15 +5,12 @@ use rustc_span::Symbol;
 
 #[derive(Clone)]
 pub struct Context<'tcx> {
-    /// Rust编译器的核心结构！！！
     pub tcx: TyCtxt<'tcx>,
 
-    /// mir中DefId和名字的映射
     pub _all_generic_funcs_did_sym_map: FxHashMap<DefId, Symbol>,
 }
 
 impl<'tcx> Context<'tcx> {
-    /// 构造上下文
     pub fn new(tcx: TyCtxt<'tcx>, _args: FxHashMap<String, String>) -> Self {
         let mut _all_generic_funcs_did_sym_map = FxHashMap::default();
         for local_def_id in tcx.hir().body_owners() {
