@@ -3,7 +3,7 @@ use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
     ty::{self, ParamEnv},
 };
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use crate::mono;
 
@@ -29,7 +29,7 @@ pub struct CallSite<'tcx> {
     callee: FunctionInstance<'tcx>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionInstance<'tcx> {
     instance: ty::Instance<'tcx>,
 }
@@ -108,7 +108,10 @@ impl<'tcx> FunctionInstance<'tcx> {
                                 match self.tcx.def_kind(def_id) {
                                     def::DefKind::Fn | def::DefKind::AssocFn => {
                                         // Check if this is a trait method call and resolve to the actual implementation
-
+                                        println!(
+                                            "try to resolve {:?}, monoed_args: {:?}",
+                                            def_id, monoed_args
+                                        );
                                         if let Ok(Some(callee_instance)) = ty::Instance::try_resolve(
                                             self.tcx,
                                             param_env,
@@ -179,8 +182,13 @@ pub fn perform_mono_analysis<'tcx>(
     instances: Vec<FunctionInstance<'tcx>>,
 ) -> CallGraph<'tcx> {
     let mut call_graph = CallGraph::new(instances);
+    let mut visited = HashSet::new();
 
     while let Some(instance) = call_graph.instances.pop_front() {
+        if visited.contains(&instance) {
+            continue;
+        }
+        visited.insert(instance);
         let substs = mono::Monomorphizer::new(tcx, instance.instance.args.to_vec());
         let call_sites = instance.collect_callsites(tcx, &substs);
         for call_site in call_sites {
