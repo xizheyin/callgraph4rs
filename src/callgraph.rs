@@ -40,8 +40,12 @@ impl<'tcx> FunctionInstance<'tcx> {
 
     fn collect_callsites(&self, tcx: ty::TyCtxt<'tcx>) -> Vec<CallSite<'tcx>> {
         let def_id = self.instance.def.def_id();
-        if !def_id.is_local() && !tcx.is_mir_available(def_id) {
+        if !def_id.is_local() {
             println!("skip external function: {:?}", def_id);
+            return Vec::new();
+        }
+        if !tcx.is_mir_available(def_id) {
+            println!("skip nobody function: {:?}", def_id);
             return Vec::new();
         }
         let instance = self.instance;
