@@ -2,7 +2,6 @@ use clap::Parser;
 use owo_colors::OwoColorize;
 use rustc_driver::Compilation;
 use rustc_interface::{interface, Queries};
-use rustc_middle::ty::{TyCtxt, TyKind};
 use std::borrow::Cow;
 use std::env;
 use std::process::Command;
@@ -10,8 +9,6 @@ use std::str;
 
 use crate::args::{AllCliArgs, CGArgs};
 use crate::callgraph;
-use crate::ccg::{self, output_dependencies_to_target};
-use crate::context::Context;
 use rustc_compat::{CrateFilter, Plugin, RustcPluginArgs, Utf8Path};
 
 #[derive(Default)]
@@ -69,56 +66,6 @@ impl CGCallbacks {
     pub(crate) fn new(args: &CGArgs) -> Self {
         Self { args: args.clone() }
     }
-
-    /// print
-    fn _print_basic(&mut self, context: &mut Context) {
-        let tcx: TyCtxt<'_> = context.tcx;
-        for (did, name) in &context._all_generic_funcs_did_sym_map {
-            // 打印模块名
-
-            let module_name = tcx.def_path(*did).to_string_no_crate_verbose();
-            println!(
-                "\nModule Name: {}, Function Name: {}",
-                module_name.yellow(),
-                name
-            );
-
-            let mir = tcx.optimized_mir(did.as_local().unwrap());
-            if self.args.show_all_mir {
-                //self.visit_body(mir);
-                for (bbidx, bb) in mir.basic_blocks.iter_enumerated() {
-                    println!("BasicBlock {}:", format!("{:?}", bbidx).red());
-
-                    for stmt in bb.statements.iter() {
-                        println!("{:?}", stmt);
-                    }
-                    println!("{:?}", bb.terminator()); // terminator
-                    match &bb.terminator().kind {
-                        rustc_middle::mir::TerminatorKind::Call { func, .. } => {
-                            println!("Call a function {:?}!", func);
-                            match func {
-                                rustc_middle::mir::Operand::Constant(const_val) => {
-                                    match const_val.ty().kind() {
-                                        TyKind::Closure(callee_def_id, _gen_args)
-                                        | TyKind::FnDef(callee_def_id, _gen_args)
-                                        | TyKind::Coroutine(callee_def_id, _gen_args) => {
-                                            println!(
-                                                "【Callee: {}】",
-                                                tcx.def_path_str(callee_def_id).green(),
-                                            );
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
 }
 
 impl rustc_driver::Callbacks for CGCallbacks {
@@ -129,17 +76,7 @@ impl rustc_driver::Callbacks for CGCallbacks {
     ) -> Compilation {
         tracing::info!("{}", "Entering after_analysis callback".red());
         queries.global_ctxt().unwrap().enter(|tcx| {
-            let context = Box::new(Context::new(tcx, self.args.to_hash_map()));
-
-            // self.print_basic(&mut context);
-            // let mir = tcx.optimized_mir(did.as_local().unwrap());
-
-            let all_dependencies = ccg::extract_dependencies(context.tcx);
-            let _ = output_dependencies_to_target(tcx, all_dependencies);
-            // let mono = tcx.collect_and_partition_mono_items(());
-            // println!("mono: {:#?}", mono);
             let generic_instances = callgraph::collect_generic_instances(tcx);
-            println!("generic_instances: {:#?}", generic_instances);
             let call_graph = callgraph::perform_mono_analysis(tcx, generic_instances);
             println!("call_graph: {:#?}", call_graph.call_sites);
         });
