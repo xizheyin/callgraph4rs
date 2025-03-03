@@ -108,19 +108,27 @@ impl<'tcx> FunctionInstance<'tcx> {
                                 match self.tcx.def_kind(def_id) {
                                     def::DefKind::Fn | def::DefKind::AssocFn => {
                                         // Check if this is a trait method call and resolve to the actual implementation
-                                        println!(
-                                            "try to resolve {:?}, monoed_args: {:?}",
-                                            def_id, monoed_args
-                                        );
-                                        if let Ok(Some(callee_instance)) = ty::Instance::try_resolve(
-                                            self.tcx,
-                                            param_env,
-                                            def_id,
-                                            monoed_args,
-                                        ) {
-                                            Some(FunctionInstance::new(callee_instance))
+
+                                        // Skip resolution for standard library functions
+                                        if crate::utils::is_std_crate(self.tcx, def_id) {
+                                            None
                                         } else {
-                                            trivial_resolve(self.tcx, def_id)
+                                            println!(
+                                                "try to resolve {:?}, monoed_args: {:?}",
+                                                def_id, monoed_args
+                                            );
+                                            if let Ok(Some(callee_instance)) =
+                                                ty::Instance::try_resolve(
+                                                    self.tcx,
+                                                    param_env,
+                                                    def_id,
+                                                    monoed_args,
+                                                )
+                                            {
+                                                Some(FunctionInstance::new(callee_instance))
+                                            } else {
+                                                trivial_resolve(self.tcx, def_id)
+                                            }
                                         }
                                     }
                                     other => {

@@ -69,3 +69,9 @@ pub fn closure_return_type<'tcx>(
     let monomorphizer = Monomorphizer::new(tcx, generic_args);
     monomorphizer.mono_type(ret_type)
 }
+
+pub fn is_std_crate(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    let def_path = tcx.def_path(def_id);
+    let crate_name = tcx.crate_name(def_path.krate);
+    crate_name.as_str() == "std" || crate_name.as_str() == "core"
+}
