@@ -66,10 +66,10 @@ impl<'tcx> FunctionInstance<'tcx> {
 
     fn collect_callsites(&self, tcx: ty::TyCtxt<'tcx>) -> Vec<CallSite<'tcx>> {
         let def_id = self.def_id();
-        if !def_id.is_local() {
-            println!("skip external function: {:?}", def_id);
-            return Vec::new();
-        }
+        // if !def_id.is_local() {
+        //     println!("skip external function: {:?}", def_id);
+        //     return Vec::new();
+        // }
         if !tcx.is_mir_available(def_id) {
             println!("skip nobody function: {:?}", def_id);
             return Vec::new();
@@ -120,7 +120,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                 _location: mir::Location,
             ) {
                 if let TerminatorKind::Call { func, .. } = &terminator.kind {
-                    println!("visit terminator: {:?}", func);
+                    //println!("visit terminator: {:?}", func);
                     use mir::Operand::*;
                     let monod_callee_func_ty = monomorphize(
                         self.tcx,
@@ -130,9 +130,12 @@ impl<'tcx> FunctionInstance<'tcx> {
                     let callee = monod_callee_func_ty.ok().and_then(|monod_ty| match func {
                         Constant(_) => match monod_ty.kind() {
                             ty::TyKind::FnDef(def_id, monoed_args) => {
+                                println!(
+                                    "visit fn: {:?}, {:?}, {:?}",
+                                    def_id, def_id.krate, def_id.index
+                                );
                                 match self.tcx.def_kind(def_id) {
                                     def::DefKind::Fn | def::DefKind::AssocFn => {
-                                        println!("visit fn: {:?}", def_id);
                                         ty::Instance::try_resolve(
                                             self.tcx,
                                             ParamEnv::reveal_all(),
@@ -158,7 +161,10 @@ impl<'tcx> FunctionInstance<'tcx> {
                                 None
                             }
                         },
-                        Move(_) | Copy(_) => todo!(),
+                        Move(_) | Copy(_) => {
+                            println!("skip move or copy: {:?}", func);
+                            None
+                        }
                     });
                     if let Some(callee) = callee {
                         self.callees.push(CallSite {
@@ -215,7 +221,7 @@ pub fn perform_mono_analysis<'tcx>(
         if visited.contains(&instance) {
             continue;
         }
-        println!("visit instance: {:?}", instance);
+        //println!("visit instance: {:?}", instance);
         visited.insert(instance);
         let call_sites = instance.collect_callsites(tcx);
         for call_site in call_sites {
