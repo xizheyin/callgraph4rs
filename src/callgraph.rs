@@ -29,17 +29,43 @@ pub struct CallSite<'tcx> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FunctionInstance<'tcx> {
-    instance: ty::Instance<'tcx>,
+pub enum FunctionInstance<'tcx> {
+    Instance(ty::Instance<'tcx>),
+    NonInstance(DefId),
 }
 
 impl<'tcx> FunctionInstance<'tcx> {
-    fn new(instance: ty::Instance<'tcx>) -> Self {
-        Self { instance }
+    fn new_instance(instance: ty::Instance<'tcx>) -> Self {
+        Self::Instance(instance)
+    }
+
+    fn new_non_instance(def_id: DefId) -> Self {
+        Self::NonInstance(def_id)
+    }
+
+    fn instance(&self) -> Option<ty::Instance<'tcx>> {
+        match self {
+            Self::Instance(instance) => Some(instance.clone()),
+            Self::NonInstance(_) => None,
+        }
+    }
+
+    fn _non_instance(&self) -> Option<DefId> {
+        match self {
+            Self::Instance(_) => None,
+            Self::NonInstance(def_id) => Some(*def_id),
+        }
+    }
+
+    fn def_id(&self) -> DefId {
+        match self {
+            Self::Instance(instance) => instance.def_id(),
+            Self::NonInstance(def_id) => *def_id,
+        }
     }
 
     fn collect_callsites(&self, tcx: ty::TyCtxt<'tcx>) -> Vec<CallSite<'tcx>> {
-        let def_id = self.instance.def.def_id();
+        let def_id = self.def_id();
         if !def_id.is_local() {
             println!("skip external function: {:?}", def_id);
             return Vec::new();
@@ -48,9 +74,8 @@ impl<'tcx> FunctionInstance<'tcx> {
             println!("skip nobody function: {:?}", def_id);
             return Vec::new();
         }
-        let instance = self.instance;
         let mir = tcx.optimized_mir(def_id);
-        self.extract_function_call(tcx, mir, &instance.def.def_id())
+        self.extract_function_call(tcx, mir, &def_id)
     }
 
     /// Extract information about all function calls in `function`
@@ -95,10 +120,11 @@ impl<'tcx> FunctionInstance<'tcx> {
                 _location: mir::Location,
             ) {
                 if let TerminatorKind::Call { func, .. } = &terminator.kind {
+                    println!("visit terminator: {:?}", func);
                     use mir::Operand::*;
                     let monod_callee_func_ty = monomorphize(
                         self.tcx,
-                        self.caller_instance.instance,
+                        self.caller_instance.instance().expect("instance is None"),
                         func.ty(self.caller_body, self.tcx),
                     );
                     let callee = monod_callee_func_ty.ok().and_then(|monod_ty| match func {
@@ -106,6 +132,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                             ty::TyKind::FnDef(def_id, monoed_args) => {
                                 match self.tcx.def_kind(def_id) {
                                     def::DefKind::Fn | def::DefKind::AssocFn => {
+                                        println!("visit fn: {:?}", def_id);
                                         ty::Instance::try_resolve(
                                             self.tcx,
                                             ParamEnv::reveal_all(),
@@ -114,15 +141,22 @@ impl<'tcx> FunctionInstance<'tcx> {
                                         )
                                         .ok()
                                         .flatten()
-                                        .map(FunctionInstance::new)
+                                        .map(FunctionInstance::new_instance)
                                         .or_else(|| trivial_resolve(self.tcx, *def_id))
+                                        .or(Some(FunctionInstance::new_non_instance(*def_id)))
                                     }
                                     other => {
                                         panic!("internal error: unknown call type: {:?}", other);
                                     }
                                 }
                             }
-                            _ => panic!("internal error: unexpected function type: {:?}", monod_ty),
+                            _ => {
+                                println!(
+                                    "internal error: unexpected function type: {:?}",
+                                    monod_ty
+                                );
+                                None
+                            }
                         },
                         Move(_) | Copy(_) => todo!(),
                     });
@@ -149,7 +183,7 @@ pub fn collect_generic_instances(tcx: ty::TyCtxt<'_>) -> Vec<FunctionInstance<'_
         if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
             let instance = ty::Instance::try_resolve(tcx, ParamEnv::empty(), *def_id, args);
             if let Ok(Some(instance)) = instance {
-                instances.push(FunctionInstance::new(instance));
+                instances.push(FunctionInstance::new_instance(instance));
             }
         }
     }
@@ -161,7 +195,7 @@ fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<FunctionInstanc
     if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
         let instance = ty::Instance::try_resolve(tcx, ParamEnv::empty(), *def_id, args);
         if let Ok(Some(instance)) = instance {
-            Some(FunctionInstance::new(instance))
+            Some(FunctionInstance::new_instance(instance))
         } else {
             None
         }
@@ -181,6 +215,7 @@ pub fn perform_mono_analysis<'tcx>(
         if visited.contains(&instance) {
             continue;
         }
+        println!("visit instance: {:?}", instance);
         visited.insert(instance);
         let call_sites = instance.collect_callsites(tcx);
         for call_site in call_sites {
