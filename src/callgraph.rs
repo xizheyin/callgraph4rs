@@ -64,25 +64,36 @@ impl<'tcx> FunctionInstance<'tcx> {
         }
     }
 
+    fn is_instance(&self) -> bool {
+        match self {
+            Self::Instance(_) => true,
+            Self::NonInstance(_) => false,
+        }
+    }
+    fn is_non_instance(&self) -> bool {
+        !self.is_instance()
+    }
+
     fn collect_callsites(&self, tcx: ty::TyCtxt<'tcx>) -> Vec<CallSite<'tcx>> {
         let def_id = self.def_id();
-        // if !def_id.is_local() {
-        //     println!("skip external function: {:?}", def_id);
-        //     return Vec::new();
-        // }
-        if !tcx.is_mir_available(def_id) {
-            println!("skip nobody function: {:?}", def_id);
+
+        if self.is_non_instance() {
+            tracing::warn!("skip non-instance function: {:?}", self);
             return Vec::new();
         }
-        let mir = tcx.optimized_mir(def_id);
-        self.extract_function_call(tcx, mir, &def_id)
+
+        if !tcx.is_mir_available(def_id) {
+            tracing::warn!("skip nobody function: {:?}", def_id);
+            return Vec::new();
+        }
+
+        self.extract_function_call(tcx, &def_id)
     }
 
     /// Extract information about all function calls in `function`
     fn extract_function_call(
         &self,
         tcx: ty::TyCtxt<'tcx>,
-        caller_body: &mir::Body<'tcx>,
         caller_id: &DefId,
     ) -> Vec<CallSite<'tcx>> {
         use mir::visit::Visitor;
@@ -92,7 +103,6 @@ impl<'tcx> FunctionInstance<'tcx> {
             tcx: ty::TyCtxt<'tcx>,
             caller_instance: &'local FunctionInstance<'tcx>,
             caller_body: &'local mir::Body<'tcx>,
-            caller_id: &'local DefId,
             callees: Vec<CallSite<'tcx>>,
         }
 
@@ -100,13 +110,11 @@ impl<'tcx> FunctionInstance<'tcx> {
             fn new(
                 tcx: ty::TyCtxt<'tcx>,
                 caller_instance: &'local FunctionInstance<'tcx>,
-                caller_id: &'local DefId,
                 caller_body: &'local mir::Body<'tcx>,
             ) -> Self {
                 SearchFunctionCall {
                     tcx,
                     caller_instance,
-                    caller_id,
                     caller_body,
                     callees: Vec::default(),
                 }
@@ -120,7 +128,6 @@ impl<'tcx> FunctionInstance<'tcx> {
                 _location: mir::Location,
             ) {
                 if let TerminatorKind::Call { func, .. } = &terminator.kind {
-                    //println!("visit terminator: {:?}", func);
                     use mir::Operand::*;
                     let monod_callee_func_ty = monomorphize(
                         self.tcx,
@@ -130,10 +137,6 @@ impl<'tcx> FunctionInstance<'tcx> {
                     let callee = monod_callee_func_ty.ok().and_then(|monod_ty| match func {
                         Constant(_) => match monod_ty.kind() {
                             ty::TyKind::FnDef(def_id, monoed_args) => {
-                                println!(
-                                    "visit fn: {:?}, {:?}, {:?}",
-                                    def_id, def_id.krate, def_id.index
-                                );
                                 match self.tcx.def_kind(def_id) {
                                     def::DefKind::Fn | def::DefKind::AssocFn => {
                                         ty::Instance::try_resolve(
@@ -162,7 +165,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                             }
                         },
                         Move(_) | Copy(_) => {
-                            println!("skip move or copy: {:?}", func);
+                            tracing::warn!("skip move or copy: {:?}", func);
                             None
                         }
                     });
@@ -176,7 +179,8 @@ impl<'tcx> FunctionInstance<'tcx> {
             }
         }
 
-        let mut search_callees = SearchFunctionCall::new(tcx, self, caller_id, caller_body);
+        let caller_body = tcx.optimized_mir(caller_id);
+        let mut search_callees = SearchFunctionCall::new(tcx, self, caller_body);
         search_callees.visit_body(caller_body);
         search_callees.callees
     }

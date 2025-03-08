@@ -4,12 +4,41 @@ use rustc_driver::Compilation;
 use rustc_interface::{interface, Queries};
 use std::borrow::Cow;
 use std::env;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
 
 use crate::args::{AllCliArgs, CGArgs};
 use crate::callgraph;
 use rustc_compat::{CrateFilter, Plugin, RustcPluginArgs, Utf8Path};
+
+/// 将内容写入指定文件并记录日志
+///
+/// # 参数
+/// * `path` - 要写入的文件路径
+/// * `write_fn` - 负责写入内容的闭包
+///
+/// # 返回值
+/// * `io::Result<()>` - 操作成功返回 Ok(()), 失败返回 Err
+fn write_to_file<P, F>(path: P, write_fn: F) -> io::Result<()>
+where
+    P: AsRef<Path>,
+    F: FnOnce(&mut std::fs::File) -> io::Result<()>,
+{
+    // 确保父目录存在
+    if let Some(parent) = path.as_ref().parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // 创建和写入文件
+    let mut file = std::fs::File::create(&path)?;
+    write_fn(&mut file)?;
+
+    // 记录成功信息
+    tracing::info!("Successfully wrote to file: {}", path.as_ref().display());
+    Ok(())
+}
 
 #[derive(Default)]
 pub struct CGDriver;
@@ -49,24 +78,16 @@ impl Plugin for CGDriver {
     fn run(
         self,
         compiler_args: Vec<String>,
-        plugin_args: Self::PluginArgs,
+        _plugin_args: Self::PluginArgs,
     ) -> rustc_interface::interface::Result<()> {
         tracing::debug!("Rust CG start to run.");
-        let mut callbacks = CGCallbacks::new(&plugin_args);
+        let mut callbacks = CGCallbacks {};
         let compiler = rustc_driver::RunCompiler::new(&compiler_args, &mut callbacks);
         compiler.run()
     }
 }
 
-pub(crate) struct CGCallbacks {
-    args: CGArgs,
-}
-
-impl CGCallbacks {
-    pub(crate) fn new(args: &CGArgs) -> Self {
-        Self { args: args.clone() }
-    }
-}
+pub(crate) struct CGCallbacks {}
 
 impl rustc_driver::Callbacks for CGCallbacks {
     fn after_analysis<'tcx>(
@@ -74,13 +95,22 @@ impl rustc_driver::Callbacks for CGCallbacks {
         _compiler: &interface::Compiler,
         queries: &'tcx Queries<'tcx>,
     ) -> Compilation {
-        tracing::info!("{}", "Entering after_analysis callback".red());
+        tracing::info!("{}", "Entering after_analysis callback");
         queries.global_ctxt().unwrap().enter(|tcx| {
             let generic_instances = callgraph::collect_generic_instances(tcx);
             let call_graph = callgraph::perform_mono_analysis(tcx, generic_instances);
-            println!("call_graph: {:#?}", call_graph.call_sites);
+
+            // 使用抽象函数写入调用图
+            let output_path = PathBuf::from("target/callgraph.txt");
+
+            match write_to_file(&output_path, |file| {
+                writeln!(file, "call_graph: {:#?}", call_graph.call_sites)
+            }) {
+                Ok(_) => tracing::info!("Call graph written to {}", output_path.display()),
+                Err(e) => tracing::error!("Failed to write call graph: {}", e),
+            }
         });
-        tracing::info!("{}", "Exiting after_analysis callback".red());
+        tracing::info!("{}", "Exiting after_analysis callback");
         Compilation::Continue
     }
 }

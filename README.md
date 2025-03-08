@@ -8,4 +8,4 @@ and change into the test directory, and type
 ```
 call-cg
 ```
-it print the `.dot` in `./target`
+it print the call graph in `./target/callgraph.txt`
