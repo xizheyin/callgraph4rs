@@ -128,47 +128,104 @@ impl<'tcx> FunctionInstance<'tcx> {
                 _location: mir::Location,
             ) {
                 if let TerminatorKind::Call { func, .. } = &terminator.kind {
+                    tracing::debug!(
+                        "Found Call => callee: {:?}, func.ty: {:?}",
+                        func,
+                        func.ty(self.caller_body, self.tcx)
+                    );
+
                     use mir::Operand::*;
-                    let monod_callee_func_ty = monomorphize(
+
+                    let before_mono_ty = func.ty(self.caller_body, self.tcx);
+                    let monod_result = monomorphize(
                         self.tcx,
                         self.caller_instance.instance().expect("instance is None"),
-                        func.ty(self.caller_body, self.tcx),
+                        before_mono_ty,
                     );
-                    let callee = monod_callee_func_ty.ok().and_then(|monod_ty| match func {
-                        Constant(_) => match monod_ty.kind() {
-                            ty::TyKind::FnDef(def_id, monoed_args) => {
-                                match self.tcx.def_kind(def_id) {
-                                    def::DefKind::Fn | def::DefKind::AssocFn => {
-                                        ty::Instance::try_resolve(
-                                            self.tcx,
-                                            ParamEnv::reveal_all(),
-                                            *def_id,
-                                            monoed_args,
-                                        )
-                                        .ok()
-                                        .flatten()
-                                        .map(FunctionInstance::new_instance)
-                                        .or_else(|| trivial_resolve(self.tcx, *def_id))
-                                        .or(Some(FunctionInstance::new_non_instance(*def_id)))
-                                    }
-                                    other => {
-                                        panic!("internal error: unknown call type: {:?}", other);
-                                    }
+
+                    let callee = if let Err(err) = monod_result {
+                        tracing::warn!("monomorphize error: {:?}", err);
+                        match func {
+                            Constant(_) => match before_mono_ty.kind() {
+                                ty::TyKind::FnDef(def_id, _) => {
+                                    Some(FunctionInstance::new_non_instance(*def_id))
                                 }
-                            }
-                            _ => {
-                                println!(
-                                    "internal error: unexpected function type: {:?}",
-                                    monod_ty
-                                );
+                                _ => None,
+                            },
+                            Move(_) | Copy(_) => {
+                                tracing::warn!("skip move or copy: {:?}", func);
                                 None
                             }
-                        },
-                        Move(_) | Copy(_) => {
-                            tracing::warn!("skip move or copy: {:?}", func);
-                            None
                         }
-                    });
+                    } else {
+                        let monod_ty = monod_result.unwrap();
+
+                        match func {
+                            Constant(_) => match monod_ty.kind() {
+                                ty::TyKind::FnDef(def_id, monoed_args) => {
+                                    match self.tcx.def_kind(def_id) {
+                                        def::DefKind::Fn | def::DefKind::AssocFn => {
+                                            let instance_result = ty::Instance::try_resolve(
+                                                self.tcx,
+                                                ParamEnv::reveal_all(),
+                                                *def_id,
+                                                monoed_args,
+                                            );
+
+                                            match instance_result {
+                                                Err(err) => {
+                                                    tracing::debug!(
+                                                        "Instance [{:?}] resolution error: {:?}",
+                                                        def_id,
+                                                        err
+                                                    );
+                                                    None
+                                                }
+                                                Ok(opt_instance) => {
+                                                    if let Some(instance) = opt_instance {
+                                                        tracing::debug!("instance: {:?}", instance);
+                                                        Some(FunctionInstance::new_instance(
+                                                            instance,
+                                                        ))
+                                                    } else {
+                                                        tracing::debug!(
+                                                        "Instance [{:?}] resolution returned None",
+                                                        def_id
+                                                    );
+                                                        trivial_resolve(self.tcx, *def_id).or_else(|| {
+                                                            tracing::warn!("Trivial resolve [{:?}] also failed, using non-instance", def_id);
+                                                            Some(FunctionInstance::new_non_instance(*def_id))
+                                                        })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        other => {
+                                            tracing::error!(
+                                                "internal error: unknown call type: {:?}",
+                                                other
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    tracing::error!(
+                                        "internal error: unexpected function type: {:?}",
+                                        monod_ty
+                                    );
+                                    None
+                                }
+                            },
+                            // 移动或复制操作数
+                            Move(_) | Copy(_) => {
+                                tracing::warn!("skip move or copy: {:?}", func);
+                                None
+                            }
+                        }
+                    };
+
+                    // 如果找到被调用函数，添加到调用列表
                     if let Some(callee) = callee {
                         self.callees.push(CallSite {
                             _caller: self.caller_instance.clone(),

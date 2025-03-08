@@ -1,5 +1,4 @@
 use clap::Parser;
-use owo_colors::OwoColorize;
 use rustc_driver::Compilation;
 use rustc_interface::{interface, Queries};
 use std::borrow::Cow;
@@ -13,29 +12,29 @@ use crate::args::{AllCliArgs, CGArgs};
 use crate::callgraph;
 use rustc_compat::{CrateFilter, Plugin, RustcPluginArgs, Utf8Path};
 
-/// 将内容写入指定文件并记录日志
+/// Write content to a specified file and log the result
 ///
-/// # 参数
-/// * `path` - 要写入的文件路径
-/// * `write_fn` - 负责写入内容的闭包
+/// # Parameters
+/// * `path` - Path to the output file
+/// * `write_fn` - Closure that handles the actual writing
 ///
-/// # 返回值
-/// * `io::Result<()>` - 操作成功返回 Ok(()), 失败返回 Err
+/// # Returns
+/// * `io::Result<()>` - Ok(()) on success, Err on failure
 fn write_to_file<P, F>(path: P, write_fn: F) -> io::Result<()>
 where
     P: AsRef<Path>,
     F: FnOnce(&mut std::fs::File) -> io::Result<()>,
 {
-    // 确保父目录存在
+    // Ensure parent directory exists
     if let Some(parent) = path.as_ref().parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    // 创建和写入文件
+    // Create and write to the file
     let mut file = std::fs::File::create(&path)?;
     write_fn(&mut file)?;
 
-    // 记录成功信息
+    // Log success message
     tracing::info!("Successfully wrote to file: {}", path.as_ref().display());
     Ok(())
 }
@@ -100,7 +99,7 @@ impl rustc_driver::Callbacks for CGCallbacks {
             let generic_instances = callgraph::collect_generic_instances(tcx);
             let call_graph = callgraph::perform_mono_analysis(tcx, generic_instances);
 
-            // 使用抽象函数写入调用图
+            // Use the abstracted function to write the call graph
             let output_path = PathBuf::from("target/callgraph.txt");
 
             match write_to_file(&output_path, |file| {
