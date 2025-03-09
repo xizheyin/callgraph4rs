@@ -149,7 +149,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                             Constant(_) => match before_mono_ty.kind() {
                                 ty::TyKind::FnDef(def_id, _) => {
                                     tracing::warn!(
-                                        "Monomorphization {:?} failed, using non-instance",
+                                        "Callee {:?} is not monomorphized, using non-instance",
                                         def_id
                                     );
                                     Some(FunctionInstance::new_non_instance(*def_id))
@@ -181,15 +181,15 @@ impl<'tcx> FunctionInstance<'tcx> {
                                                 Err(err) => {
                                                     tracing::error!(
                                                         "Instance [{:?}] resolution error: {:?}",
-                                                        def_id,
+                                                        monod_ty,
                                                         err
                                                     );
                                                     None
                                                 }
                                                 Ok(opt_instance) => {
                                                     if let Some(instance) = opt_instance {
-                                                        tracing::debug!(
-                                                            "Resolved instance: {:?}",
+                                                        tracing::info!(
+                                                            "Resolved instance successfully: {:?}",
                                                             instance
                                                         );
                                                         Some(FunctionInstance::new_instance(
@@ -197,8 +197,8 @@ impl<'tcx> FunctionInstance<'tcx> {
                                                         ))
                                                     } else {
                                                         tracing::warn!(
-                                                            "Resolve [{:?}] failed, try trivial resolve",
-                                                            def_id
+                                                            "Resolve [{:#?}] failed, try trivial resolve",
+                                                            monod_ty
                                                         );
                                                         trivial_resolve(self.tcx, *def_id).or_else(|| {
                                                             tracing::warn!("Trivial resolve [{:?}] also failed, using non-instance", def_id);
