@@ -4,7 +4,9 @@ use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
     ty::{self, ParamEnv},
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use crate::mir_utils::{self, BlockPath};
 
 pub(crate) struct CallGraph<'tcx> {
     _all_generic_instances: Vec<FunctionInstance<'tcx>>,
@@ -26,6 +28,7 @@ impl<'tcx> CallGraph<'tcx> {
 pub struct CallSite<'tcx> {
     _caller: FunctionInstance<'tcx>,
     callee: FunctionInstance<'tcx>,
+    constraint_cnt: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,8 +89,8 @@ impl<'tcx> FunctionInstance<'tcx> {
             tracing::warn!("skip nobody function: {:?}", def_id);
             return Vec::new();
         }
-
-        self.extract_function_call(tcx, &def_id)
+        let constraints = get_constraints(tcx, def_id);
+        self.extract_function_call(tcx, &def_id, constraints)
     }
 
     /// Extract information about all function calls in `function`
@@ -95,6 +98,7 @@ impl<'tcx> FunctionInstance<'tcx> {
         &self,
         tcx: ty::TyCtxt<'tcx>,
         caller_id: &DefId,
+        constraints: HashMap<mir::BasicBlock, BlockPath>,
     ) -> Vec<CallSite<'tcx>> {
         use mir::visit::Visitor;
 
@@ -104,6 +108,8 @@ impl<'tcx> FunctionInstance<'tcx> {
             caller_instance: &'local FunctionInstance<'tcx>,
             caller_body: &'local mir::Body<'tcx>,
             callees: Vec<CallSite<'tcx>>,
+            constraints: HashMap<mir::BasicBlock, BlockPath>,
+            current_bb: mir::BasicBlock,
         }
 
         impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
@@ -111,17 +117,29 @@ impl<'tcx> FunctionInstance<'tcx> {
                 tcx: ty::TyCtxt<'tcx>,
                 caller_instance: &'local FunctionInstance<'tcx>,
                 caller_body: &'local mir::Body<'tcx>,
+                constraints: HashMap<mir::BasicBlock, BlockPath>,
             ) -> Self {
                 SearchFunctionCall {
                     tcx,
                     caller_instance,
                     caller_body,
                     callees: Vec::default(),
+                    constraints,
+                    current_bb: mir::BasicBlock::from_usize(0),
                 }
             }
         }
 
         impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
+            fn visit_basic_block_data(
+                &mut self,
+                block: mir::BasicBlock,
+                data: &mir::BasicBlockData<'tcx>,
+            ) {
+                self.current_bb = block;
+                self.super_basic_block_data(block, data);
+            }
+
             fn visit_terminator(
                 &mut self,
                 terminator: &Terminator<'tcx>,
@@ -238,6 +256,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                         self.callees.push(CallSite {
                             _caller: self.caller_instance.clone(),
                             callee,
+                            constraint_cnt: self.constraints[&self.current_bb].length,
                         });
                     }
                 }
@@ -245,7 +264,7 @@ impl<'tcx> FunctionInstance<'tcx> {
         }
 
         let caller_body = tcx.optimized_mir(caller_id);
-        let mut search_callees = SearchFunctionCall::new(tcx, self, caller_body);
+        let mut search_callees = SearchFunctionCall::new(tcx, self, caller_body, constraints);
         search_callees.visit_body(caller_body);
         search_callees.callees
     }
@@ -291,6 +310,7 @@ pub fn perform_mono_analysis<'tcx>(
             continue;
         }
         visited.insert(instance);
+
         let call_sites = instance.collect_callsites(tcx);
         for call_site in call_sites {
             call_graph.instances.push_back(call_site.callee);
@@ -313,4 +333,9 @@ where
         ty::ParamEnv::reveal_all(),
         ty::EarlyBinder::bind(value),
     )
+}
+
+fn get_constraints(tcx: ty::TyCtxt, def_id: DefId) -> HashMap<mir::BasicBlock, BlockPath> {
+    let mir = tcx.optimized_mir(def_id);
+    mir_utils::compute_shortest_paths(&mir)
 }
