@@ -144,10 +144,14 @@ impl<'tcx> FunctionInstance<'tcx> {
                     );
 
                     let callee = if let Err(err) = monod_result {
-                        tracing::warn!("monomorphize error: {:?}", err);
+                        tracing::warn!("Monomorphization failed: {:?}", err);
                         match func {
                             Constant(_) => match before_mono_ty.kind() {
                                 ty::TyKind::FnDef(def_id, _) => {
+                                    tracing::warn!(
+                                        "Monomorphization {:?} failed, using non-instance",
+                                        def_id
+                                    );
                                     Some(FunctionInstance::new_non_instance(*def_id))
                                 }
                                 _ => None,
@@ -165,6 +169,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                                 ty::TyKind::FnDef(def_id, monoed_args) => {
                                     match self.tcx.def_kind(def_id) {
                                         def::DefKind::Fn | def::DefKind::AssocFn => {
+                                            tracing::debug!("Try resolve instance: {:?}", monod_ty);
                                             let instance_result = ty::Instance::try_resolve(
                                                 self.tcx,
                                                 ParamEnv::reveal_all(),
@@ -174,7 +179,7 @@ impl<'tcx> FunctionInstance<'tcx> {
 
                                             match instance_result {
                                                 Err(err) => {
-                                                    tracing::debug!(
+                                                    tracing::error!(
                                                         "Instance [{:?}] resolution error: {:?}",
                                                         def_id,
                                                         err
@@ -183,15 +188,18 @@ impl<'tcx> FunctionInstance<'tcx> {
                                                 }
                                                 Ok(opt_instance) => {
                                                     if let Some(instance) = opt_instance {
-                                                        tracing::debug!("instance: {:?}", instance);
+                                                        tracing::debug!(
+                                                            "Resolved instance: {:?}",
+                                                            instance
+                                                        );
                                                         Some(FunctionInstance::new_instance(
                                                             instance,
                                                         ))
                                                     } else {
-                                                        tracing::debug!(
-                                                        "Instance [{:?}] resolution returned None",
-                                                        def_id
-                                                    );
+                                                        tracing::warn!(
+                                                            "Resolve [{:?}] failed, try trivial resolve",
+                                                            def_id
+                                                        );
                                                         trivial_resolve(self.tcx, *def_id).or_else(|| {
                                                             tracing::warn!("Trivial resolve [{:?}] also failed, using non-instance", def_id);
                                                             Some(FunctionInstance::new_non_instance(*def_id))
@@ -282,11 +290,9 @@ pub fn perform_mono_analysis<'tcx>(
         if visited.contains(&instance) {
             continue;
         }
-        //println!("visit instance: {:?}", instance);
         visited.insert(instance);
         let call_sites = instance.collect_callsites(tcx);
         for call_site in call_sites {
-            //println!("call_site: {:?}", call_site);
             call_graph.instances.push_back(call_site.callee);
             call_graph.call_sites.push(call_site);
         }
