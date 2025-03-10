@@ -20,11 +20,11 @@ pub struct BlockPath {
 #[derive(Debug, Clone)]
 pub struct ConstraintInfo {
     /// The block containing the constraint
-    pub block: BasicBlock,
+    pub _block: BasicBlock,
     /// Type of the constraint
-    pub kind: ConstraintKind,
+    pub _kind: ConstraintKind,
     /// Source code location if available
-    pub source_info: Option<String>,
+    pub _source_info: Option<String>,
 }
 
 /// Types of constraints that can appear in MIR
@@ -33,7 +33,7 @@ pub enum ConstraintKind {
     /// Switch on an integer value (if/match)
     SwitchInt,
     /// Other types of constraints
-    Other(String),
+    _Other(String),
 }
 
 impl BlockPath {
@@ -87,7 +87,7 @@ fn is_constraint_terminator(terminator: &TerminatorKind<'_>) -> Option<Constrain
 ///
 /// # Returns
 /// * A map from each basic block to its shortest path from the entry block
-pub fn compute_shortest_paths<'tcx>(body: &Body<'tcx>) -> HashMap<BasicBlock, BlockPath> {
+pub fn compute_shortest_paths(body: &Body<'_>) -> HashMap<BasicBlock, BlockPath> {
     let entry = mir::START_BLOCK;
     let mut result = HashMap::new();
     let mut visited = HashSet::new();
@@ -114,9 +114,9 @@ pub fn compute_shortest_paths<'tcx>(body: &Body<'tcx>) -> HashMap<BasicBlock, Bl
                     let constraint_info = constraint_kind.as_ref().map(|kind| {
                         let source_str = format!("{:?}", terminator.source_info);
                         ConstraintInfo {
-                            block,
-                            kind: kind.clone(),
-                            source_info: Some(source_str),
+                            _block: block,
+                            _kind: kind.clone(),
+                            _source_info: Some(source_str),
                         }
                     });
 

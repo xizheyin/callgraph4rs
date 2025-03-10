@@ -77,16 +77,24 @@ impl Plugin for CGDriver {
     fn run(
         self,
         compiler_args: Vec<String>,
-        _plugin_args: Self::PluginArgs,
+        plugin_args: Self::PluginArgs,
     ) -> rustc_interface::interface::Result<()> {
         tracing::debug!("Rust CG start to run.");
-        let mut callbacks = CGCallbacks {};
+        let mut callbacks = CGCallbacks::new(plugin_args);
         let compiler = rustc_driver::RunCompiler::new(&compiler_args, &mut callbacks);
         compiler.run()
     }
 }
 
-pub(crate) struct CGCallbacks {}
+pub(crate) struct CGCallbacks {
+    plugin_args: CGArgs,
+}
+
+impl CGCallbacks {
+    pub fn new(plugin_args: CGArgs) -> Self {
+        Self { plugin_args }
+    }
+}
 
 impl rustc_driver::Callbacks for CGCallbacks {
     fn after_analysis<'tcx>(
@@ -97,7 +105,10 @@ impl rustc_driver::Callbacks for CGCallbacks {
         tracing::info!("{}", "Entering after_analysis callback");
         queries.global_ctxt().unwrap().enter(|tcx| {
             let generic_instances = callgraph::collect_generic_instances(tcx);
-            let call_graph = callgraph::perform_mono_analysis(tcx, generic_instances);
+
+            // Pass the plugin args to the analysis function
+            let call_graph =
+                callgraph::perform_mono_analysis(tcx, generic_instances, &self.plugin_args);
 
             // Use the abstracted function to write the call graph
             let output_path = PathBuf::from("target/callgraph.txt");

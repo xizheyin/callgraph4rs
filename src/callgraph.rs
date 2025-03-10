@@ -22,6 +22,51 @@ impl<'tcx> CallGraph<'tcx> {
             call_sites: Vec::new(),
         }
     }
+
+    /// Deduplicate call sites, keeping only the one with the minimum constraint count
+    /// for each unique caller-callee pair
+    pub fn deduplicate_call_sites(&mut self) {
+        // Create a map to track the call site with minimum constraint_cnt for each caller-callee pair
+        let mut min_constraints: HashMap<(FunctionInstance<'tcx>, FunctionInstance<'tcx>), usize> =
+            HashMap::new();
+        let mut min_indices: HashMap<(FunctionInstance<'tcx>, FunctionInstance<'tcx>), usize> =
+            HashMap::new();
+
+        // Find minimum constraint count for each caller-callee pair
+        for (index, call_site) in self.call_sites.iter().enumerate() {
+            let key = (call_site._caller, call_site.callee);
+
+            if let Some(existing_cnt) = min_constraints.get(&key) {
+                if call_site.constraint_cnt < *existing_cnt {
+                    min_constraints.insert(key, call_site.constraint_cnt);
+                    min_indices.insert(key, index);
+                }
+            } else {
+                min_constraints.insert(key, call_site.constraint_cnt);
+                min_indices.insert(key, index);
+            }
+        }
+
+        // Keep only the call sites with minimum constraint counts
+        let indices_to_keep: HashSet<usize> = min_indices.values().cloned().collect();
+
+        // Create a new call_sites vector with only the deduplicated entries
+        let mut deduplicated_call_sites = Vec::new();
+
+        for (index, call_site) in self.call_sites.iter().enumerate() {
+            if indices_to_keep.contains(&index) {
+                deduplicated_call_sites.push(call_site.clone());
+            }
+        }
+
+        tracing::info!(
+            "Deduplicated call sites: {} -> {} entries",
+            self.call_sites.len(),
+            deduplicated_call_sites.len()
+        );
+
+        self.call_sites = deduplicated_call_sites;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +93,7 @@ impl<'tcx> FunctionInstance<'tcx> {
 
     fn instance(&self) -> Option<ty::Instance<'tcx>> {
         match self {
-            Self::Instance(instance) => Some(instance.clone()),
+            Self::Instance(instance) => Some(*instance),
             Self::NonInstance(_) => None,
         }
     }
@@ -254,7 +299,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                     // 如果找到被调用函数，添加到调用列表
                     if let Some(callee) = callee {
                         self.callees.push(CallSite {
-                            _caller: self.caller_instance.clone(),
+                            _caller: *self.caller_instance,
                             callee,
                             constraint_cnt: self.constraints[&self.current_bb].constraints,
                         });
@@ -301,6 +346,7 @@ fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<FunctionInstanc
 pub fn perform_mono_analysis<'tcx>(
     tcx: ty::TyCtxt<'tcx>,
     instances: Vec<FunctionInstance<'tcx>>,
+    options: &crate::args::CGArgs,
 ) -> CallGraph<'tcx> {
     let mut call_graph = CallGraph::new(instances);
     let mut visited = HashSet::new();
@@ -317,6 +363,15 @@ pub fn perform_mono_analysis<'tcx>(
             call_graph.call_sites.push(call_site);
         }
     }
+
+    // Deduplicate call sites if the option is enabled
+    if options.deduplicate {
+        tracing::info!("Deduplication enabled - removing duplicate call sites");
+        call_graph.deduplicate_call_sites();
+    } else {
+        tracing::info!("Deduplication disabled - keeping all call sites");
+    }
+
     call_graph
 }
 
@@ -337,5 +392,5 @@ where
 
 fn get_constraints(tcx: ty::TyCtxt, def_id: DefId) -> HashMap<mir::BasicBlock, BlockPath> {
     let mir = tcx.optimized_mir(def_id);
-    constraint_utils::compute_shortest_paths(&mir)
+    constraint_utils::compute_shortest_paths(mir)
 }

@@ -3,6 +3,7 @@ use rustc_hash::FxHashMap;
 use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Value};
+use std::path::PathBuf;
 
 /// CG args
 #[derive(Parser, Clone, Debug, Serialize, Deserialize)]
@@ -22,6 +23,15 @@ pub struct CGArgs {
     /// Entry point of the program
     #[clap(long = "entry-point")]
     pub entry_point: Option<String>,
+
+    /// Output directory
+    #[arg(short, long)]
+    pub output_dir: Option<PathBuf>,
+
+    /// Deduplicate call sites for the same caller-callee pair
+    /// When enabled, only keeps the call site with the minimum constraints
+    #[arg(long, default_value_t = false)]
+    pub deduplicate: bool,
 }
 
 impl CGArgs {
@@ -54,13 +64,12 @@ impl CGArgs {
 #[derive(Parser, Clone, Debug, Serialize, Deserialize)]
 #[clap(about = "This is a bug detector for Rust.")]
 pub struct AllCliArgs {
-    ///
-    #[clap(flatten)]
-    pub cg_args: CGArgs,
-
-    // The rest of the arguments are passed to cargo
-    #[clap(last = true)]
+    /// Arguments passed to cargo rust-analyzer
+    #[arg(trailing_var_arg = true)]
     pub cargo_args: Vec<String>,
+
+    #[command(flatten)]
+    pub cg_args: CGArgs,
 }
 
 impl AllCliArgs {
