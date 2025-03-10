@@ -6,7 +6,7 @@ use rustc_middle::{
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::mir_utils::{self, BlockPath};
+use crate::constraint_utils::{self, BlockPath};
 
 pub(crate) struct CallGraph<'tcx> {
     _all_generic_instances: Vec<FunctionInstance<'tcx>>,
@@ -256,7 +256,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                         self.callees.push(CallSite {
                             _caller: self.caller_instance.clone(),
                             callee,
-                            constraint_cnt: self.constraints[&self.current_bb].length,
+                            constraint_cnt: self.constraints[&self.current_bb].constraints,
                         });
                     }
                 }
@@ -337,5 +337,5 @@ where
 
 fn get_constraints(tcx: ty::TyCtxt, def_id: DefId) -> HashMap<mir::BasicBlock, BlockPath> {
     let mir = tcx.optimized_mir(def_id);
-    mir_utils::compute_shortest_paths(&mir)
+    constraint_utils::compute_shortest_paths(&mir)
 }

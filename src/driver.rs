@@ -10,7 +10,6 @@ use std::str;
 
 use crate::args::{AllCliArgs, CGArgs};
 use crate::callgraph;
-use crate::mir_utils;
 use rustc_compat::{CrateFilter, Plugin, RustcPluginArgs, Utf8Path};
 
 /// Write content to a specified file and log the result

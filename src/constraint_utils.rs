@@ -32,12 +32,6 @@ pub struct ConstraintInfo {
 pub enum ConstraintKind {
     /// Switch on an integer value (if/match)
     SwitchInt,
-    /// Switch on a discriminant (enum variant)
-    SwitchDiscriminant,
-    /// Conditional unwinding
-    FalseUnwind,
-    /// Conditional execution based on a value
-    Assert,
     /// Other types of constraints
     Other(String),
 }
@@ -80,10 +74,7 @@ impl BlockPath {
 fn is_constraint_terminator(terminator: &TerminatorKind<'_>) -> Option<ConstraintKind> {
     match terminator {
         TerminatorKind::SwitchInt { .. } => Some(ConstraintKind::SwitchInt),
-        TerminatorKind::FalseEdge { .. } | TerminatorKind::FalseUnwind { .. } => {
-            Some(ConstraintKind::FalseUnwind)
-        }
-        TerminatorKind::Assert { .. } => Some(ConstraintKind::Assert),
+        //TerminatorKind::Assert { .. } => Some(ConstraintKind::Assert),
         _ => None,
     }
 }
