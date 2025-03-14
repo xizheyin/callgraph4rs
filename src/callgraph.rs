@@ -1,5 +1,5 @@
 use rustc_hir::{def, def_id::DefId};
-use rustc_middle::ty::{Instance, TyCtxt, TypeFoldable};
+use rustc_middle::ty::{Instance, TyCtxt, TypeFoldable, TypingEnv};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
     ty::{self, ParamEnv},
@@ -198,10 +198,13 @@ impl<'tcx> FunctionInstance<'tcx> {
                     );
 
                     use mir::Operand::*;
+                    let typing_env =
+                        TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
 
                     let before_mono_ty = func.ty(self.caller_body, self.tcx);
                     let monod_result = monomorphize(
                         self.tcx,
+                        typing_env,
                         self.caller_instance.instance().expect("instance is None"),
                         before_mono_ty,
                     );
@@ -235,7 +238,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                                             tracing::debug!("Try resolve instance: {:?}", monod_ty);
                                             let instance_result = ty::Instance::try_resolve(
                                                 self.tcx,
-                                                ParamEnv::reveal_all(),
+                                                typing_env,
                                                 *def_id,
                                                 monoed_args,
                                             );
@@ -317,10 +320,15 @@ impl<'tcx> FunctionInstance<'tcx> {
 
 pub fn collect_generic_instances(tcx: ty::TyCtxt<'_>) -> Vec<FunctionInstance<'_>> {
     let mut instances = Vec::new();
-    for def_id in tcx.hir().body_owners() {
+    for def_id in tcx.hir_body_owners() {
         let ty = tcx.type_of(def_id).skip_binder();
         if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
-            let instance = ty::Instance::try_resolve(tcx, ParamEnv::empty(), *def_id, args);
+            let instance = ty::Instance::try_resolve(
+                tcx,
+                TypingEnv::post_analysis(tcx, *def_id),
+                *def_id,
+                args,
+            );
             if let Ok(Some(instance)) = instance {
                 instances.push(FunctionInstance::new_instance(instance));
             }
@@ -332,7 +340,8 @@ pub fn collect_generic_instances(tcx: ty::TyCtxt<'_>) -> Vec<FunctionInstance<'_
 fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<FunctionInstance<'_>> {
     let ty = tcx.type_of(def_id).skip_binder();
     if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
-        let instance = ty::Instance::try_resolve(tcx, ParamEnv::empty(), *def_id, args);
+        let instance =
+            ty::Instance::try_resolve(tcx, TypingEnv::post_analysis(tcx, def_id), *def_id, args);
         if let Ok(Some(instance)) = instance {
             Some(FunctionInstance::new_instance(instance))
         } else {
@@ -377,6 +386,7 @@ pub fn perform_mono_analysis<'tcx>(
 
 pub fn monomorphize<'tcx, T>(
     tcx: TyCtxt<'tcx>,
+    typing_env: TypingEnv<'tcx>,
     instance: Instance<'tcx>,
     value: T,
 ) -> Result<T, ty::normalize_erasing_regions::NormalizationError<'tcx>>
@@ -385,7 +395,7 @@ where
 {
     instance.try_instantiate_mir_and_normalize_erasing_regions(
         tcx,
-        ty::ParamEnv::reveal_all(),
+        typing_env,
         ty::EarlyBinder::bind(value),
     )
 }
