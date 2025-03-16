@@ -2,7 +2,7 @@ use rustc_hir::{def, def_id::DefId};
 use rustc_middle::ty::{Instance, TyCtxt, TypeFoldable, TypingEnv};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
-    ty::{self, ParamEnv},
+    ty::{self},
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 

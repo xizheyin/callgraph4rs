@@ -73,7 +73,7 @@ pub struct AllCliArgs {
 }
 
 impl AllCliArgs {
-    pub fn verify_options(&mut self, _tcx: TyCtxt<'_>) {
+    pub fn _verify_options(&mut self, _tcx: TyCtxt<'_>) {
         tracing::info!("CG runs under options: {:?}", self);
     }
 }
