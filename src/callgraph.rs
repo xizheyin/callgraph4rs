@@ -67,6 +67,87 @@ impl<'tcx> CallGraph<'tcx> {
 
         self.call_sites = deduplicated_call_sites;
     }
+
+    /// 将调用图格式化为可读的文本
+    pub fn format_call_graph(&self, tcx: TyCtxt<'tcx>) -> String {
+        let mut result = String::new();
+
+        result.push_str("Call Graph:\n");
+        result.push_str("===========\n\n");
+
+        // 按调用者组织调用
+        let mut calls_by_caller: HashMap<FunctionInstance<'tcx>, Vec<&CallSite<'tcx>>> =
+            HashMap::new();
+
+        for call_site in &self.call_sites {
+            calls_by_caller
+                .entry(call_site._caller)
+                .or_default()
+                .push(call_site);
+        }
+
+        // 对调用者排序以获得一致的输出
+        let mut callers: Vec<FunctionInstance<'tcx>> = calls_by_caller.keys().cloned().collect();
+        callers.sort_by_key(|caller| format!("{:?}", caller));
+
+        for caller in callers {
+            // 获取调用者名称
+            let caller_name = self.function_instance_to_string(tcx, caller);
+            result.push_str(&format!("Function: {}\n", caller_name));
+
+            // 获取此调用者的所有调用
+            if let Some(calls) = calls_by_caller.get(&caller) {
+                // 按被调用者和约束计数排序
+                let mut sorted_calls = calls.clone();
+                sorted_calls.sort_by(|a, b| {
+                    let a_name = self.function_instance_to_string(tcx, a.callee);
+                    let b_name = self.function_instance_to_string(tcx, b.callee);
+                    a_name
+                        .cmp(&b_name)
+                        .then_with(|| a.constraint_cnt.cmp(&b.constraint_cnt))
+                });
+
+                // 输出调用信息
+                for call in sorted_calls {
+                    let callee_name = self.function_instance_to_string(tcx, call.callee);
+                    result.push_str(&format!(
+                        "  -> {} [constraint: {}]\n",
+                        callee_name, call.constraint_cnt
+                    ));
+                }
+
+                result.push_str("\n");
+            }
+        }
+
+        result
+    }
+
+    /// 将函数实例转换为可读字符串
+    fn function_instance_to_string(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        instance: FunctionInstance<'tcx>,
+    ) -> String {
+        match instance {
+            FunctionInstance::Instance(inst) => {
+                let def_id = inst.def_id();
+                // 获取可读的函数名称
+                let def_path = tcx.def_path_str(def_id);
+
+                // 添加泛型参数信息，如果有的话
+                if inst.args.len() > 0 {
+                    format!("{}<{:?}>", def_path, inst.args)
+                } else {
+                    def_path
+                }
+            }
+            FunctionInstance::NonInstance(def_id) => {
+                // 对于非实例，只显示路径
+                format!("{} (non-instance)", tcx.def_path_str(def_id))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -373,8 +454,8 @@ pub fn perform_mono_analysis<'tcx>(
         }
     }
 
-    // Deduplicate call sites if the option is enabled
-    if options.deduplicate {
+    // Deduplicate call sites if deduplication is not disabled
+    if !options.no_dedup {
         tracing::info!("Deduplication enabled - removing duplicate call sites");
         call_graph.deduplicate_call_sites();
     } else {

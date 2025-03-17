@@ -28,10 +28,10 @@ pub struct CGArgs {
     #[arg(short, long)]
     pub output_dir: Option<PathBuf>,
 
-    /// Deduplicate call sites for the same caller-callee pair
-    /// When enabled, only keeps the call site with the minimum constraints
+    /// No deduplication for call sites
+    /// When enabled, keeps all call sites for the same caller-callee pair
     #[arg(long, default_value_t = false)]
-    pub deduplicate: bool,
+    pub no_dedup: bool,
 }
 
 impl CGArgs {
