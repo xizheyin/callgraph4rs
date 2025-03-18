@@ -1,6 +1,7 @@
 use clap::Parser;
 use rustc_driver::Compilation;
-use rustc_interface::{interface, Queries};
+use rustc_interface::interface;
+use rustc_middle::ty::TyCtxt;
 use std::borrow::Cow;
 use std::env;
 use std::io::{self, Write};
@@ -74,15 +75,10 @@ impl Plugin for CGDriver {
 
     // In the driver, we use the Rustc API to start a compiler session
     // for the arguments given to us by rustc_plugin.
-    fn run(
-        self,
-        compiler_args: Vec<String>,
-        plugin_args: Self::PluginArgs,
-    ) -> rustc_interface::interface::Result<()> {
+    fn run(self, compiler_args: Vec<String>, plugin_args: Self::PluginArgs) {
         tracing::debug!("Rust CG start to run.");
         let mut callbacks = CGCallbacks::new(plugin_args);
-        let compiler = rustc_driver::RunCompiler::new(&compiler_args, &mut callbacks);
-        compiler.run()
+        rustc_driver::run_compiler(&compiler_args, &mut callbacks);
     }
 }
 
@@ -100,26 +96,42 @@ impl rustc_driver::Callbacks for CGCallbacks {
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,
-        queries: &'tcx Queries<'tcx>,
+        tcx: TyCtxt<'tcx>,
     ) -> Compilation {
         tracing::info!("{}", "Entering after_analysis callback");
-        queries.global_ctxt().unwrap().enter(|tcx| {
-            let generic_instances = callgraph::collect_generic_instances(tcx);
 
-            // Pass the plugin args to the analysis function
-            let call_graph =
-                callgraph::perform_mono_analysis(tcx, generic_instances, &self.plugin_args);
+        let generic_instances = callgraph::collect_generic_instances(tcx);
 
-            // Use the abstracted function to write the call graph
-            let output_path = PathBuf::from("target/callgraph.txt");
+        // Pass the plugin args to the analysis function
+        let call_graph =
+            callgraph::perform_mono_analysis(tcx, generic_instances, &self.plugin_args);
 
-            match write_to_file(&output_path, |file| {
-                writeln!(file, "call_graph: {:#?}", call_graph.call_sites)
-            }) {
-                Ok(_) => tracing::info!("Call graph written to {}", output_path.display()),
-                Err(e) => tracing::error!("Failed to write call graph: {}", e),
-            }
+        // 获取当前 crate 名称
+        let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string();
+
+        // 创建输出文件路径
+        let output_dir = self
+            .plugin_args
+            .output_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("target"));
+        let output_path = output_dir.join(format!("{}-callgraph.txt", crate_name));
+
+        // 获取格式化的调用图输出
+        let formatted_callgraph = call_graph.format_call_graph(tcx);
+
+        // 写入调用图到文件
+        match write_to_file(&output_path, |file| write!(file, "{}", formatted_callgraph)) {
+            Ok(_) => tracing::info!("Call graph written to {}", output_path.display()),
+            Err(e) => tracing::error!("Failed to write call graph: {}", e),
+        }
+
+        // 为了方便调试，也可以创建一个包含原始数据的文件
+        let debug_path = output_dir.join(format!("{}-callgraph-debug.txt", crate_name));
+        let _ = write_to_file(&debug_path, |file| {
+            writeln!(file, "call_graph: {:#?}", call_graph.call_sites)
         });
+
         tracing::info!("{}", "Exiting after_analysis callback");
         Compilation::Continue
     }

@@ -1,20 +1,53 @@
+# Rust Call Graph Generator
 
-install `cg`, `cargo-cg`, `call-cg` by
-```
+A tool for generating and analyzing call graphs for Rust projects.
+
+## Overview
+
+This tool allows you to generate a call graph for your Rust project, which can help with:
+- Understanding code flow
+- Detecting bugs
+- Analyzing dependencies between functions
+
+## Installation
+
+Install `cg`, `cargo-cg`, and `call-cg` by running:
+
+```bash
 cargo install --path .
 ```
 
-and change into the test directory, and type
-```
+## Usage
+
+### Basic Usage
+
+Navigate to your project directory and run:
+
+```bash
 call-cg
 ```
-it print the call graph in `./target/callgraph.txt`
 
-`call-cg --deduplicate` will deduplicate same callees, choosing the shortest path to it.
+This will generate a call graph and save it to `./target/callgraph.txt`.
 
+### Deduplication
 
+By default, the deduplication feature is enabled. This feature removes duplicate callees and keeps only the shortest path.
 
-`call-cg -h` will print:
+To disable deduplication and show all call paths:
+
+```bash
+call-cg --no-dedup
+```
+
+### Options
+
+To see all available options:
+
+```bash
+call-cg -h
+```
+
+Output:
 ```
 This is a bug detector for Rust.
 
@@ -29,6 +62,92 @@ Options:
       --emit-mir                   Emit MIR
       --entry-point <ENTRY_POINT>  Entry point of the program
   -o, --output-dir <OUTPUT_DIR>    Output directory
-      --deduplicate                Deduplicate call sites for the same caller-callee pair When enabled, only keeps the call site with the minimum constraints
+      --no-dedup                   Disable deduplication of call sites for the same caller-callee pair
+                                   When enabled, keeps all call sites
+      --find-callers-of <FUNCTION_PATH> Find all functions that directly or indirectly call the specified function
   -h, --help                       Print help
 ```
+
+## Examples
+
+### Analyzing a Test Directory
+
+```bash
+cd test_directory
+call-cg
+# Call graph will be available at ./target/callgraph.txt
+```
+
+### Using Custom Output Directory
+
+```bash
+call-cg -o ./custom_output
+# Call graph will be available at ./custom_output/callgraph.txt
+```
+
+### Finding All Callers of a Function
+
+To find all functions that directly or indirectly call a specific function:
+
+```bash
+call-cg --find-callers-of "std::collections::HashMap::insert"
+```
+
+This will generate a report of all callers in `./target/callers.txt`.
+
+You can use a partial path - the tool will match any function containing that substring.
+
+## Testing
+
+This repository includes a test project (`test_callgraph`) designed to test the call graph generation capabilities. It contains a sample Rust program with complex call relationships involving traits, generics, closures, and more.
+
+### Running the Test Project
+
+1. First, make sure you have installed the tool:
+   ```bash
+   cargo install --path .
+   ```
+
+2. Navigate to the test project directory:
+   ```bash
+   cd test_callgraph
+   ```
+
+3. Build the test project:
+   ```bash
+   cargo build
+   ```
+
+4. Run the call graph analyzer:
+   ```bash
+   call-cg
+   ```
+   This will generate a call graph at `./target/callgraph.txt`.
+
+5. Try finding callers of specific functions, for example:
+   ```bash
+   # Find all callers of Product::discounted_price
+   call-cg --find-callers-of "Product::discounted_price"
+   
+   # Find all callers of DataStore::calculate_value_with_strategy
+   call-cg --find-callers-of "DataStore::calculate_value_with_strategy"
+   ```
+
+6. To see all possible call paths without deduplication:
+   ```bash
+   call-cg --no-dedup
+   ```
+
+For detailed information about the test project structure and specific test cases, please refer to the documentation in the `test_callgraph` directory.
+
+## License
+
+This project is dual-licensed under both:
+
+- [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)
+- [MIT License](https://opensource.org/licenses/MIT)
+
+You may choose either license at your option.
+
+
+
