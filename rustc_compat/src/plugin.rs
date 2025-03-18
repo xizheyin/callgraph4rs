@@ -52,7 +52,11 @@ pub trait Plugin: Sized {
     /// For example, you could pass a `--feature` flag here.
     fn modify_cargo(&self, cargo: &mut Command, cargo_args: &Self::CargoArgs);
     /// Executes the plugin with a set of compiler and plugin args.
-    fn run(self, compiler_args: Vec<String>, plugin_args: Self::PluginArgs);
+    fn run(
+        self,
+        compiler_args: Vec<String>,
+        plugin_args: Self::PluginArgs,
+    ) -> rustc_interface::interface::Result<()>;
 }
 
 /// The name of the environment variable shared between the CLI and the driver.

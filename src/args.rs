@@ -28,15 +28,10 @@ pub struct CGArgs {
     #[arg(short, long)]
     pub output_dir: Option<PathBuf>,
 
-    /// No deduplication for call sites
-    /// When enabled, keeps all call sites for the same caller-callee pair
+    /// Deduplicate call sites for the same caller-callee pair
+    /// When enabled, only keeps the call site with the minimum constraints
     #[arg(long, default_value_t = false)]
-    pub no_dedup: bool,
-
-    /// Find all callers of the specified function path
-    /// When specified, will output all functions that directly or indirectly call this function
-    #[arg(long)]
-    pub find_callers_of: Option<String>,
+    pub deduplicate: bool,
 }
 
 impl CGArgs {
@@ -78,7 +73,7 @@ pub struct AllCliArgs {
 }
 
 impl AllCliArgs {
-    pub fn _verify_options(&mut self, _tcx: TyCtxt<'_>) {
+    pub fn verify_options(&mut self, _tcx: TyCtxt<'_>) {
         tracing::info!("CG runs under options: {:?}", self);
     }
 }

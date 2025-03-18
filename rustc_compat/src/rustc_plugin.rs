@@ -139,9 +139,9 @@ pub fn rustc_main<T: Plugin>(plugin: T) {
         if run_plugin {
             let plugin_args: T::PluginArgs =
                 serde_json::from_str(&env::var(PLUGIN_ARGS).unwrap()).unwrap();
-            plugin.run(args, plugin_args);
+            plugin.run(args, plugin_args)
         } else {
-            rustc_driver::run_compiler(&args, &mut DefaultCallbacks);
+            rustc_driver::RunCompiler::new(&args, &mut DefaultCallbacks).run()
         }
     }))
 }

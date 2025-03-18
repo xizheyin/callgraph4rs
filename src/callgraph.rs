@@ -1,8 +1,8 @@
 use rustc_hir::{def, def_id::DefId};
-use rustc_middle::ty::{Instance, TyCtxt, TypeFoldable, TypingEnv};
+use rustc_middle::ty::{Instance, TyCtxt, TypeFoldable};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
-    ty::{self},
+    ty::{self, ParamEnv},
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -65,194 +65,7 @@ impl<'tcx> CallGraph<'tcx> {
             deduplicated_call_sites.len()
         );
 
-        self.call_sites = deduplicated_call_sites.into_iter().collect();
-    }
-
-    /// 将调用图格式化为可读的文本
-    pub fn format_call_graph(&self, tcx: TyCtxt<'tcx>) -> String {
-        let mut result = String::new();
-
-        result.push_str("Call Graph:\n");
-        result.push_str("===========\n\n");
-
-        // 按调用者组织调用
-        let mut calls_by_caller: HashMap<FunctionInstance<'tcx>, Vec<&CallSite<'tcx>>> =
-            HashMap::new();
-
-        for call_site in &self.call_sites {
-            calls_by_caller
-                .entry(call_site._caller)
-                .or_default()
-                .push(call_site);
-        }
-
-        // 对调用者排序以获得一致的输出
-        let mut callers: Vec<FunctionInstance<'tcx>> = calls_by_caller.keys().cloned().collect();
-        callers.sort_by_key(|caller| format!("{:?}", caller));
-
-        for caller in callers {
-            // 获取调用者名称
-            let caller_name = self.function_instance_to_string(tcx, caller);
-            result.push_str(&format!("Function: {}\n", caller_name));
-
-            // 获取此调用者的所有调用
-            if let Some(calls) = calls_by_caller.get(&caller) {
-                // 按被调用者和约束计数排序
-                let mut sorted_calls = calls.clone();
-                sorted_calls.sort_by(|a, b| {
-                    let a_name = self.function_instance_to_string(tcx, a.callee);
-                    let b_name = self.function_instance_to_string(tcx, b.callee);
-                    a_name
-                        .cmp(&b_name)
-                        .then_with(|| a.constraint_cnt.cmp(&b.constraint_cnt))
-                });
-
-                // 输出调用信息
-                for call in sorted_calls {
-                    let callee_name = self.function_instance_to_string(tcx, call.callee);
-                    result.push_str(&format!(
-                        "  -> {} [constraint: {}]\n",
-                        callee_name, call.constraint_cnt
-                    ));
-                }
-
-                result.push_str("\n");
-            }
-        }
-
-        result
-    }
-
-    /// 将函数实例转换为可读字符串
-    fn function_instance_to_string(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        instance: FunctionInstance<'tcx>,
-    ) -> String {
-        match instance {
-            FunctionInstance::Instance(inst) => {
-                let def_id = inst.def_id();
-                // 获取可读的函数名称
-                let def_path = tcx.def_path_str(def_id);
-
-                // 添加泛型参数信息，如果有的话
-                if inst.args.len() > 0 {
-                    format!("{}<{:?}>", def_path, inst.args)
-                } else {
-                    def_path
-                }
-            }
-            FunctionInstance::NonInstance(def_id) => {
-                // 对于非实例，只显示路径
-                format!("{} (non-instance)", tcx.def_path_str(def_id))
-            }
-        }
-    }
-
-    /// 查找直接或间接调用指定函数的所有函数
-    pub fn find_callers(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        target_path: &str,
-    ) -> Option<Vec<FunctionInstance<'tcx>>> {
-        // 首先查找匹配指定路径的函数
-        let target_functions: Vec<FunctionInstance<'tcx>> = self
-            .call_sites
-            .iter()
-            .map(|call_site| call_site.callee)
-            .filter(|func| {
-                let func_path = self.function_instance_to_string(tcx, *func);
-                func_path.contains(target_path)
-            })
-            .collect();
-
-        if target_functions.is_empty() {
-            tracing::warn!("No function found matching path: {}", target_path);
-            return None;
-        }
-
-        tracing::info!(
-            "Found {} functions matching path: {}",
-            target_functions.len(),
-            target_path
-        );
-        for func in &target_functions {
-            tracing::info!(
-                "Matched function: {}",
-                self.function_instance_to_string(tcx, *func)
-            );
-        }
-
-        // 创建从被调用者到调用者的映射
-        let mut callee_to_callers: HashMap<
-            FunctionInstance<'tcx>,
-            HashSet<FunctionInstance<'tcx>>,
-        > = HashMap::new();
-        for call_site in &self.call_sites {
-            callee_to_callers
-                .entry(call_site.callee)
-                .or_default()
-                .insert(call_site._caller);
-        }
-
-        // 找到所有直接和间接调用者
-        let mut all_callers: HashSet<FunctionInstance<'tcx>> = HashSet::new();
-        let mut queue: VecDeque<FunctionInstance<'tcx>> = target_functions.into_iter().collect();
-        let mut processed: HashSet<FunctionInstance<'tcx>> = HashSet::new();
-
-        while let Some(current) = queue.pop_front() {
-            if processed.contains(&current) {
-                continue;
-            }
-            processed.insert(current);
-
-            if let Some(callers) = callee_to_callers.get(&current) {
-                for caller in callers {
-                    if !processed.contains(caller) {
-                        all_callers.insert(*caller);
-                        queue.push_back(*caller);
-                    }
-                }
-            }
-        }
-
-        if all_callers.is_empty() {
-            tracing::warn!("No callers found for the specified function");
-            return None;
-        }
-
-        Some(all_callers.into_iter().collect())
-    }
-
-    /// 格式化调用者信息为可读的文本
-    pub fn format_callers(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        target_path: &str,
-        callers: Vec<FunctionInstance<'tcx>>,
-    ) -> String {
-        let mut result = String::new();
-
-        result.push_str(&format!(
-            "Callers of functions matching '{}':\n",
-            target_path
-        ));
-        result.push_str("==================================\n\n");
-
-        // 对调用者排序以获得一致的输出
-        let mut sorted_callers: Vec<FunctionInstance<'tcx>> = callers;
-        sorted_callers.sort_by_key(|caller| format!("{:?}", caller));
-
-        for caller in &sorted_callers {
-            let caller_name = self.function_instance_to_string(tcx, *caller);
-            result.push_str(&format!("- {}\n", caller_name));
-        }
-
-        result.push_str(&format!(
-            "\nTotal: {} callers found\n",
-            sorted_callers.len()
-        ));
-        result
+        self.call_sites = deduplicated_call_sites;
     }
 }
 
@@ -385,13 +198,10 @@ impl<'tcx> FunctionInstance<'tcx> {
                     );
 
                     use mir::Operand::*;
-                    let typing_env =
-                        TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
 
                     let before_mono_ty = func.ty(self.caller_body, self.tcx);
                     let monod_result = monomorphize(
                         self.tcx,
-                        typing_env,
                         self.caller_instance.instance().expect("instance is None"),
                         before_mono_ty,
                     );
@@ -425,7 +235,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                                             tracing::debug!("Try resolve instance: {:?}", monod_ty);
                                             let instance_result = ty::Instance::try_resolve(
                                                 self.tcx,
-                                                typing_env,
+                                                ParamEnv::reveal_all(),
                                                 *def_id,
                                                 monoed_args,
                                             );
@@ -507,15 +317,10 @@ impl<'tcx> FunctionInstance<'tcx> {
 
 pub fn collect_generic_instances(tcx: ty::TyCtxt<'_>) -> Vec<FunctionInstance<'_>> {
     let mut instances = Vec::new();
-    for def_id in tcx.hir_body_owners() {
+    for def_id in tcx.hir().body_owners() {
         let ty = tcx.type_of(def_id).skip_binder();
         if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
-            let instance = ty::Instance::try_resolve(
-                tcx,
-                TypingEnv::post_analysis(tcx, *def_id),
-                *def_id,
-                args,
-            );
+            let instance = ty::Instance::try_resolve(tcx, ParamEnv::empty(), *def_id, args);
             if let Ok(Some(instance)) = instance {
                 instances.push(FunctionInstance::new_instance(instance));
             }
@@ -527,8 +332,7 @@ pub fn collect_generic_instances(tcx: ty::TyCtxt<'_>) -> Vec<FunctionInstance<'_
 fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<FunctionInstance<'_>> {
     let ty = tcx.type_of(def_id).skip_binder();
     if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
-        let instance =
-            ty::Instance::try_resolve(tcx, TypingEnv::post_analysis(tcx, def_id), *def_id, args);
+        let instance = ty::Instance::try_resolve(tcx, ParamEnv::empty(), *def_id, args);
         if let Ok(Some(instance)) = instance {
             Some(FunctionInstance::new_instance(instance))
         } else {
@@ -560,33 +364,12 @@ pub fn perform_mono_analysis<'tcx>(
         }
     }
 
-    // Deduplicate call sites if deduplication is not disabled
-    if !options.no_dedup {
+    // Deduplicate call sites if the option is enabled
+    if options.deduplicate {
         tracing::info!("Deduplication enabled - removing duplicate call sites");
         call_graph.deduplicate_call_sites();
     } else {
         tracing::info!("Deduplication disabled - keeping all call sites");
-    }
-
-    // 如果指定了要查找的函数，则查找其调用者
-    if let Some(target_path) = &options.find_callers_of {
-        tracing::info!("Finding callers of function: {}", target_path);
-        if let Some(callers) = call_graph.find_callers(tcx, target_path) {
-            let callers_output = call_graph.format_callers(tcx, target_path, callers);
-
-            // 输出到文件
-            let output_path = options
-                .output_dir
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("./target"))
-                .join("callers.txt");
-
-            if let Err(e) = std::fs::write(&output_path, callers_output) {
-                tracing::error!("Failed to write callers to file: {:?}", e);
-            } else {
-                tracing::info!("Callers output written to: {:?}", output_path);
-            }
-        }
     }
 
     call_graph
@@ -594,7 +377,6 @@ pub fn perform_mono_analysis<'tcx>(
 
 pub fn monomorphize<'tcx, T>(
     tcx: TyCtxt<'tcx>,
-    typing_env: TypingEnv<'tcx>,
     instance: Instance<'tcx>,
     value: T,
 ) -> Result<T, ty::normalize_erasing_regions::NormalizationError<'tcx>>
@@ -603,7 +385,7 @@ where
 {
     instance.try_instantiate_mir_and_normalize_erasing_regions(
         tcx,
-        typing_env,
+        ty::ParamEnv::reveal_all(),
         ty::EarlyBinder::bind(value),
     )
 }

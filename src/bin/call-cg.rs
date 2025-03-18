@@ -6,7 +6,7 @@ use std::process::Command;
 fn main() -> std::io::Result<()> {
     // 完全禁用日志
     //std::env::set_var("RUST_LOG", "debug");
-    std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir --cap-lints allow");
+    std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir");
 
     // 获取用户的主目录
     let home_dir = env::var("HOME").expect("Could not find home directory");
