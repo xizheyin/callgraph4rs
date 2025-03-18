@@ -62,7 +62,9 @@ Options:
       --emit-mir                   Emit MIR
       --entry-point <ENTRY_POINT>  Entry point of the program
   -o, --output-dir <OUTPUT_DIR>    Output directory
-      --no-dedup                   No deduplication for call sites When enabled, keeps all call sites for the same caller-callee pair
+      --no-dedup                   Disable deduplication of call sites for the same caller-callee pair
+                                   When enabled, keeps all call sites
+      --find-callers-of <FUNCTION_PATH> Find all functions that directly or indirectly call the specified function
   -h, --help                       Print help
 ```
 
@@ -82,6 +84,61 @@ call-cg
 call-cg -o ./custom_output
 # Call graph will be available at ./custom_output/callgraph.txt
 ```
+
+### Finding All Callers of a Function
+
+To find all functions that directly or indirectly call a specific function:
+
+```bash
+call-cg --find-callers-of "std::collections::HashMap::insert"
+```
+
+This will generate a report of all callers in `./target/callers.txt`.
+
+You can use a partial path - the tool will match any function containing that substring.
+
+## Testing
+
+This repository includes a test project (`test_callgraph`) designed to test the call graph generation capabilities. It contains a sample Rust program with complex call relationships involving traits, generics, closures, and more.
+
+### Running the Test Project
+
+1. First, make sure you have installed the tool:
+   ```bash
+   cargo install --path .
+   ```
+
+2. Navigate to the test project directory:
+   ```bash
+   cd test_callgraph
+   ```
+
+3. Build the test project:
+   ```bash
+   cargo build
+   ```
+
+4. Run the call graph analyzer:
+   ```bash
+   call-cg
+   ```
+   This will generate a call graph at `./target/callgraph.txt`.
+
+5. Try finding callers of specific functions, for example:
+   ```bash
+   # Find all callers of Product::discounted_price
+   call-cg --find-callers-of "Product::discounted_price"
+   
+   # Find all callers of DataStore::calculate_value_with_strategy
+   call-cg --find-callers-of "DataStore::calculate_value_with_strategy"
+   ```
+
+6. To see all possible call paths without deduplication:
+   ```bash
+   call-cg --no-dedup
+   ```
+
+For detailed information about the test project structure and specific test cases, please refer to the documentation in the `test_callgraph` directory.
 
 ## License
 

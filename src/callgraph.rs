@@ -65,7 +65,7 @@ impl<'tcx> CallGraph<'tcx> {
             deduplicated_call_sites.len()
         );
 
-        self.call_sites = deduplicated_call_sites;
+        self.call_sites = deduplicated_call_sites.into_iter().collect();
     }
 
     /// 将调用图格式化为可读的文本
@@ -147,6 +147,112 @@ impl<'tcx> CallGraph<'tcx> {
                 format!("{} (non-instance)", tcx.def_path_str(def_id))
             }
         }
+    }
+
+    /// 查找直接或间接调用指定函数的所有函数
+    pub fn find_callers(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        target_path: &str,
+    ) -> Option<Vec<FunctionInstance<'tcx>>> {
+        // 首先查找匹配指定路径的函数
+        let target_functions: Vec<FunctionInstance<'tcx>> = self
+            .call_sites
+            .iter()
+            .map(|call_site| call_site.callee)
+            .filter(|func| {
+                let func_path = self.function_instance_to_string(tcx, *func);
+                func_path.contains(target_path)
+            })
+            .collect();
+
+        if target_functions.is_empty() {
+            tracing::warn!("No function found matching path: {}", target_path);
+            return None;
+        }
+
+        tracing::info!(
+            "Found {} functions matching path: {}",
+            target_functions.len(),
+            target_path
+        );
+        for func in &target_functions {
+            tracing::info!(
+                "Matched function: {}",
+                self.function_instance_to_string(tcx, *func)
+            );
+        }
+
+        // 创建从被调用者到调用者的映射
+        let mut callee_to_callers: HashMap<
+            FunctionInstance<'tcx>,
+            HashSet<FunctionInstance<'tcx>>,
+        > = HashMap::new();
+        for call_site in &self.call_sites {
+            callee_to_callers
+                .entry(call_site.callee)
+                .or_default()
+                .insert(call_site._caller);
+        }
+
+        // 找到所有直接和间接调用者
+        let mut all_callers: HashSet<FunctionInstance<'tcx>> = HashSet::new();
+        let mut queue: VecDeque<FunctionInstance<'tcx>> = target_functions.into_iter().collect();
+        let mut processed: HashSet<FunctionInstance<'tcx>> = HashSet::new();
+
+        while let Some(current) = queue.pop_front() {
+            if processed.contains(&current) {
+                continue;
+            }
+            processed.insert(current);
+
+            if let Some(callers) = callee_to_callers.get(&current) {
+                for caller in callers {
+                    if !processed.contains(caller) {
+                        all_callers.insert(*caller);
+                        queue.push_back(*caller);
+                    }
+                }
+            }
+        }
+
+        if all_callers.is_empty() {
+            tracing::warn!("No callers found for the specified function");
+            return None;
+        }
+
+        Some(all_callers.into_iter().collect())
+    }
+
+    /// 格式化调用者信息为可读的文本
+    pub fn format_callers(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        target_path: &str,
+        callers: Vec<FunctionInstance<'tcx>>,
+    ) -> String {
+        let mut result = String::new();
+
+        result.push_str(&format!(
+            "Callers of functions matching '{}':\n",
+            target_path
+        ));
+        result.push_str("==================================\n\n");
+
+        // 对调用者排序以获得一致的输出
+        let mut sorted_callers: Vec<FunctionInstance<'tcx>> = callers;
+        sorted_callers.sort_by_key(|caller| format!("{:?}", caller));
+
+        for caller in &sorted_callers {
+            let caller_name = self.function_instance_to_string(tcx, *caller);
+            result.push_str(&format!("- {}\n", caller_name));
+        }
+
+        result.push_str(&format!(
+            "\nTotal: {} callers found\n",
+            sorted_callers.len()
+        ));
+        result
     }
 }
 
@@ -460,6 +566,27 @@ pub fn perform_mono_analysis<'tcx>(
         call_graph.deduplicate_call_sites();
     } else {
         tracing::info!("Deduplication disabled - keeping all call sites");
+    }
+
+    // 如果指定了要查找的函数，则查找其调用者
+    if let Some(target_path) = &options.find_callers_of {
+        tracing::info!("Finding callers of function: {}", target_path);
+        if let Some(callers) = call_graph.find_callers(tcx, target_path) {
+            let callers_output = call_graph.format_callers(tcx, target_path, callers);
+
+            // 输出到文件
+            let output_path = options
+                .output_dir
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("./target"))
+                .join("callers.txt");
+
+            if let Err(e) = std::fs::write(&output_path, callers_output) {
+                tracing::error!("Failed to write callers to file: {:?}", e);
+            } else {
+                tracing::info!("Callers output written to: {:?}", output_path);
+            }
+        }
     }
 
     call_graph

@@ -32,6 +32,11 @@ pub struct CGArgs {
     /// When enabled, keeps all call sites for the same caller-callee pair
     #[arg(long, default_value_t = false)]
     pub no_dedup: bool,
+
+    /// Find all callers of the specified function path
+    /// When specified, will output all functions that directly or indirectly call this function
+    #[arg(long)]
+    pub find_callers_of: Option<String>,
 }
 
 impl CGArgs {
