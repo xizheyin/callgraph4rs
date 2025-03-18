@@ -95,7 +95,27 @@ call-cg --find-callers-of "std::collections::HashMap::insert"
 
 This will generate a report of all callers in `./target/callers.txt`.
 
-You can use a partial path - the tool will match any function containing that substring.
+You can use a partial path - the tool will match any function containing that substring. The matching behavior works as follows:
+
+- If the path includes generic parameters (contains `<` character), it will match against the full function path including generic parameters or the basic path
+- If the path does not include generic parameters, the tool will intelligently remove all generic parameter sections (`::<...>`) from function paths before matching, providing clean results when searching for generic functions
+
+Examples:
+```bash
+# Match any DataStore::total_value regardless of generic parameters
+# This will remove all generic parts from paths when matching
+call-cg --find-callers-of "DataStore::total_value"
+
+# Find callers of other crates
+call-cg --find-callers-of "std::collections::HashMap::new"
+
+# Match only functions that contain this specific generic instantiation in their path
+# Using precise generic parameter syntax to match specific instances
+RUST_LOG=off call-cg --find-callers-of "DataStore::<Electronics>::total_value"
+
+# Find all callers of HashMap::new method from standard library, using full generic path
+RUST_LOG=off call-cg --find-callers-of "std::collections::HashMap::<K, V>::new"
+```
 
 ## Testing
 

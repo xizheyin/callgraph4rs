@@ -68,14 +68,14 @@ impl<'tcx> CallGraph<'tcx> {
         self.call_sites = deduplicated_call_sites.into_iter().collect();
     }
 
-    /// 将调用图格式化为可读的文本
+    /// Format the call graph as readable text
     pub fn format_call_graph(&self, tcx: TyCtxt<'tcx>) -> String {
         let mut result = String::new();
 
         result.push_str("Call Graph:\n");
         result.push_str("===========\n\n");
 
-        // 按调用者组织调用
+        // Organize calls by caller
         let mut calls_by_caller: HashMap<FunctionInstance<'tcx>, Vec<&CallSite<'tcx>>> =
             HashMap::new();
 
@@ -86,18 +86,18 @@ impl<'tcx> CallGraph<'tcx> {
                 .push(call_site);
         }
 
-        // 对调用者排序以获得一致的输出
+        // Sort callers to get consistent output
         let mut callers: Vec<FunctionInstance<'tcx>> = calls_by_caller.keys().cloned().collect();
         callers.sort_by_key(|caller| format!("{:?}", caller));
 
         for caller in callers {
-            // 获取调用者名称
+            // Get caller name
             let caller_name = self.function_instance_to_string(tcx, caller);
             result.push_str(&format!("Function: {}\n", caller_name));
 
-            // 获取此调用者的所有调用
+            // Get all calls from this caller
             if let Some(calls) = calls_by_caller.get(&caller) {
-                // 按被调用者和约束计数排序
+                // Sort by callee and constraint count
                 let mut sorted_calls = calls.clone();
                 sorted_calls.sort_by(|a, b| {
                     let a_name = self.function_instance_to_string(tcx, a.callee);
@@ -107,7 +107,7 @@ impl<'tcx> CallGraph<'tcx> {
                         .then_with(|| a.constraint_cnt.cmp(&b.constraint_cnt))
                 });
 
-                // 输出调用信息
+                // Output call information
                 for call in sorted_calls {
                     let callee_name = self.function_instance_to_string(tcx, call.callee);
                     result.push_str(&format!(
@@ -123,7 +123,7 @@ impl<'tcx> CallGraph<'tcx> {
         result
     }
 
-    /// 将函数实例转换为可读字符串
+    /// Convert function instance to readable string
     fn function_instance_to_string(
         &self,
         tcx: TyCtxt<'tcx>,
@@ -132,37 +132,96 @@ impl<'tcx> CallGraph<'tcx> {
         match instance {
             FunctionInstance::Instance(inst) => {
                 let def_id = inst.def_id();
-                // 获取可读的函数名称
-                let def_path = tcx.def_path_str(def_id);
+                // Get readable function name
 
-                // 添加泛型参数信息，如果有的话
+                // Add generic parameter information, if any
                 if inst.args.len() > 0 {
-                    format!("{}<{:?}>", def_path, inst.args)
+                    tcx.def_path_str_with_args(def_id, inst.args)
                 } else {
-                    def_path
+                    tcx.def_path_str(def_id)
                 }
             }
             FunctionInstance::NonInstance(def_id) => {
-                // 对于非实例，只显示路径
+                // For non-instances, only show the path
                 format!("{} (non-instance)", tcx.def_path_str(def_id))
             }
         }
     }
 
-    /// 查找直接或间接调用指定函数的所有函数
+    /// Find all functions that directly or indirectly call the specified function
     pub fn find_callers(
         &self,
         tcx: TyCtxt<'tcx>,
         target_path: &str,
     ) -> Option<Vec<FunctionInstance<'tcx>>> {
-        // 首先查找匹配指定路径的函数
+        // First find functions that match the specified path
         let target_functions: Vec<FunctionInstance<'tcx>> = self
             .call_sites
             .iter()
             .map(|call_site| call_site.callee)
             .filter(|func| {
-                let func_path = self.function_instance_to_string(tcx, *func);
-                func_path.contains(target_path)
+                // Get complete function path (including generic parameters)
+                let full_func_path = self.function_instance_to_string(tcx, *func);
+
+                // Also get the basic path without generic parameters
+                let base_path = match func {
+                    FunctionInstance::Instance(inst) => tcx.def_path_str(inst.def_id()),
+                    FunctionInstance::NonInstance(def_id) => tcx.def_path_str(*def_id),
+                };
+
+                // If the target path contains '<', assume the user specified a complete path with generic parameters
+                if target_path.contains("<") {
+                    // If there are angle brackets, match complete path or basic path
+                    tracing::trace!("base_path: {}", base_path);
+                    tracing::trace!("full_func_path: {}", full_func_path);
+                    base_path.contains(target_path) || full_func_path.contains(target_path)
+                } else {
+                    // If there are no angle brackets, remove all generic parameter parts from function paths
+                    // Remove all ::<...> parts from base_path and full_func_path
+
+                    // Process generic parameters in path
+                    let process_path = |path: &str| -> String {
+                        let mut result = String::new();
+                        let mut in_generic = false;
+                        let mut angle_bracket_count = 0;
+                        let mut skip_from_index = 0;
+
+                        // Traverse the string, identify and remove generic parameter parts
+                        for (i, c) in path.char_indices() {
+                            if c == '<' {
+                                if !in_generic && i >= 2 && &path[i - 2..i] == "::" {
+                                    // Find the starting position of generic parameters
+                                    in_generic = true;
+                                    angle_bracket_count = 1;
+                                    skip_from_index = i - 2; // Including ::
+                                    result.truncate(skip_from_index);
+                                } else if in_generic {
+                                    angle_bracket_count += 1;
+                                }
+                            } else if c == '>' && in_generic {
+                                angle_bracket_count -= 1;
+                                if angle_bracket_count == 0 {
+                                    // End of generic parameters
+                                    in_generic = false;
+                                }
+                            } else if !in_generic && skip_from_index <= i {
+                                // Not within generic parameters, add to result
+                                result.push(c);
+                            }
+                        }
+
+                        result
+                    };
+
+                    // Clean both paths
+                    let clean_base_path = process_path(&base_path);
+                    let clean_full_path = process_path(&full_func_path);
+
+                    tracing::trace!("clean_base_path: {}", clean_base_path);
+                    tracing::trace!("clean_full_path: {}", clean_full_path);
+                    // Use cleaned paths for matching
+                    clean_base_path.contains(target_path) || clean_full_path.contains(target_path)
+                }
             })
             .collect();
 
@@ -183,7 +242,7 @@ impl<'tcx> CallGraph<'tcx> {
             );
         }
 
-        // 创建从被调用者到调用者的映射
+        // Create mapping from callee to callers
         let mut callee_to_callers: HashMap<
             FunctionInstance<'tcx>,
             HashSet<FunctionInstance<'tcx>>,
@@ -195,7 +254,7 @@ impl<'tcx> CallGraph<'tcx> {
                 .insert(call_site._caller);
         }
 
-        // 找到所有直接和间接调用者
+        // Find all direct and indirect callers
         let mut all_callers: HashSet<FunctionInstance<'tcx>> = HashSet::new();
         let mut queue: VecDeque<FunctionInstance<'tcx>> = target_functions.into_iter().collect();
         let mut processed: HashSet<FunctionInstance<'tcx>> = HashSet::new();
@@ -224,7 +283,7 @@ impl<'tcx> CallGraph<'tcx> {
         Some(all_callers.into_iter().collect())
     }
 
-    /// 格式化调用者信息为可读的文本
+    /// Format caller information as readable text
     pub fn format_callers(
         &self,
         tcx: TyCtxt<'tcx>,
@@ -239,7 +298,7 @@ impl<'tcx> CallGraph<'tcx> {
         ));
         result.push_str("==================================\n\n");
 
-        // 对调用者排序以获得一致的输出
+        // Sort callers to get consistent output
         let mut sorted_callers: Vec<FunctionInstance<'tcx>> = callers;
         sorted_callers.sort_by_key(|caller| format!("{:?}", caller));
 
@@ -478,7 +537,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                                     None
                                 }
                             },
-                            // 移动或复制操作数
+                            // Move or copy operands
                             Move(_) | Copy(_) => {
                                 tracing::warn!("skip move or copy: {:?}", func);
                                 None
@@ -486,7 +545,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                         }
                     };
 
-                    // 如果找到被调用函数，添加到调用列表
+                    // If callee function is found, add to the call list
                     if let Some(callee) = callee {
                         self.callees.push(CallSite {
                             _caller: *self.caller_instance,
@@ -568,13 +627,13 @@ pub fn perform_mono_analysis<'tcx>(
         tracing::info!("Deduplication disabled - keeping all call sites");
     }
 
-    // 如果指定了要查找的函数，则查找其调用者
+    // If a function to find is specified, find its callers
     if let Some(target_path) = &options.find_callers_of {
         tracing::info!("Finding callers of function: {}", target_path);
         if let Some(callers) = call_graph.find_callers(tcx, target_path) {
             let callers_output = call_graph.format_callers(tcx, target_path, callers);
 
-            // 输出到文件
+            // Output to file
             let output_path = options
                 .output_dir
                 .clone()

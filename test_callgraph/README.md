@@ -70,7 +70,11 @@ Test Points:
 
 Recommended Command:
 ```bash
-call-cg --find-callers-of "DataStore::calculate_value_with_strategy"
+# Match any DataStore::total_value regardless of generic parameters
+call-cg --find-callers-of "DataStore::total_value"
+
+# Match only the specific generic instantiation
+call-cg --find-callers-of "DataStore<Electronics>::total_value"
 ```
 
 ### 3. Higher-Order Functions and Closures
@@ -142,6 +146,33 @@ Recommended Command:
 ```bash
 call-cg --no-dedup
 ```
+
+## Function Path Matching
+
+When using the `--find-callers-of` option, the tool supports two matching modes:
+
+1. **Base Path Matching**: When you specify a function path without generic parameters, the tool will intelligently remove all generic parameter sections (`::<...>`) from function paths before matching. This provides clean results when searching for generic functions.
+
+   ```bash
+   # This will remove all generic parts from paths when matching
+   # Example: "DataStore<Electronics>::total_value" will be processed as "DataStore::total_value"
+   call-cg --find-callers-of "DataStore::total_value"
+   ```
+
+2. **Full Path Matching**: When you include generic parameters in the path (using `<` and `>`), it will match against either the full function path with generic parameters or the basic path.
+
+   ```bash
+   # This will match paths containing this specific generic instantiation
+   # Using precise generic parameter syntax to match specific instances
+   RUST_LOG=off call-cg --find-callers-of "DataStore::<Electronics>::total_value"
+   
+   # Find all callers of HashMap::new method from standard library, using full generic path
+   RUST_LOG=off call-cg --find-callers-of "std::collections::HashMap::<K, V>::new"
+   ```
+
+Note: When matching specific generic instances, you can use the `RUST_LOG=off` parameter to disable log output for clearer results. The path format for specific generic instances should use the `::<generic_parameters>` syntax as shown in the examples above.
+
+This allows for both broad searches across all instantiations of a generic function (by omitting generic parameters) and targeted searches for specific instantiations (by including generic parameters).
 
 ## Expected Test Results
 
