@@ -37,6 +37,11 @@ pub struct CGArgs {
     /// When specified, will output all functions that directly or indirectly call this function
     #[arg(long)]
     pub find_callers_of: Option<String>,
+
+    /// Output the call graph as JSON format
+    /// This provides machine-readable data for further processing
+    #[arg(long, default_value_t = false)]
+    pub json_output: bool,
 }
 
 impl CGArgs {

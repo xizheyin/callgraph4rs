@@ -65,6 +65,7 @@ Options:
       --no-dedup                   Disable deduplication of call sites for the same caller-callee pair
                                    When enabled, keeps all call sites
       --find-callers-of <FUNCTION_PATH> Find all functions that directly or indirectly call the specified function
+      --json-output                Output the call graph in JSON format
   -h, --help                       Print help
 ```
 
@@ -84,6 +85,51 @@ call-cg
 call-cg -o ./custom_output
 # Call graph will be available at ./custom_output/callgraph.txt
 ```
+
+### Outputting Call Graph in JSON Format
+
+For machine-readable output that can be processed by other tools:
+
+```bash
+call-cg --json-output
+# JSON output will be available at ./target/callgraph.json
+```
+
+The JSON format includes detailed information about each caller and its callees, including:
+- Function names
+- Paths
+- Version information (extracted from crate metadata)
+- Call constraint depths
+
+Example JSON structure:
+```json
+[
+  {
+    "caller": {
+      "name": "example_caller_name",
+      "version": "1.0.0",
+      "path": "example/path/to/caller",
+      "constraint_depth": 3
+    },
+    "callee": [
+      {
+        "name": "example_callee_name_1",
+        "version": "1.1.0",
+        "path": "example/path/to/callee_1",
+        "constraint_depth": 2
+      },
+      {
+        "name": "example_callee_name_2",
+        "version": "1.2.0",
+        "path": "example/path/to/callee_2",
+        "constraint_depth": 1
+      }
+    ]
+  }
+]
+```
+
+This format is ideal for further processing or visualization with external tools.
 
 ### Finding All Callers of a Function
 

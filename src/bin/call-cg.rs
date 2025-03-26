@@ -25,18 +25,18 @@ fn main() -> std::io::Result<()> {
     // 复制文件到当前 crate 的根目录
     fs::copy(&cargo_toolchain_path, &target_path)?;
 
-    tracing::trace!("Start to cargo clean.");
+    // tracing::trace!("Start to cargo clean.");
     // 执行 `cargo clean`
-    let clean_status = Command::new("cargo")
-        .arg("clean")
-        .status()
-        .expect("Failed to execute cargo clean");
+    // let clean_status = Command::new("cargo")
+    //     .arg("clean")
+    //     .status()
+    //     .expect("Failed to execute cargo clean");
 
-    if !clean_status.success() {
-        eprintln!("cargo clean failed");
-        return Ok(());
-    }
-    tracing::trace!("Finish to cargo clean.");
+    // if !clean_status.success() {
+    //     eprintln!("cargo clean failed");
+    //     return Ok(());
+    // }
+    // tracing::trace!("Finish to cargo clean.");
 
     // 获取命令行参数并传递给 `cargo cg`
     let args: Vec<String> = env::args().skip(1).collect();

@@ -4,6 +4,7 @@ use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
     ty::{self},
 };
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::constraint_utils::{self, BlockPath};
@@ -313,6 +314,128 @@ impl<'tcx> CallGraph<'tcx> {
         ));
         result
     }
+
+    /// Format the call graph as JSON
+    pub fn format_call_graph_as_json(&self, tcx: TyCtxt<'tcx>) -> String {
+        // Create a map to organize calls by caller
+        let mut calls_by_caller: HashMap<FunctionInstance<'tcx>, Vec<&CallSite<'tcx>>> =
+            HashMap::new();
+
+        for call_site in &self.call_sites {
+            calls_by_caller
+                .entry(call_site._caller)
+                .or_default()
+                .push(call_site);
+        }
+
+        // Sort callers to get consistent output
+        let mut callers: Vec<FunctionInstance<'tcx>> = calls_by_caller.keys().cloned().collect();
+        callers.sort_by_key(|caller| format!("{:?}", caller));
+
+        // Create the JSON array to hold all entries
+        let mut json_entries = Vec::new();
+
+        for caller in callers {
+            // Get caller name and information
+            let caller_name = self.function_instance_to_string(tcx, caller);
+            let caller_def_id = caller.def_id();
+            let caller_path = tcx.def_path_str(caller_def_id);
+
+            // Get all calls from this caller
+            if let Some(calls) = calls_by_caller.get(&caller) {
+                // Sort by callee for consistent output
+                let mut sorted_calls = calls.clone();
+                sorted_calls.sort_by(|a, b| {
+                    let a_name = self.function_instance_to_string(tcx, a.callee);
+                    let b_name = self.function_instance_to_string(tcx, b.callee);
+                    a_name
+                        .cmp(&b_name)
+                        .then_with(|| a.constraint_cnt.cmp(&b.constraint_cnt))
+                });
+
+                // Create an array of callee objects
+                let mut callees = Vec::new();
+                for call in sorted_calls {
+                    let callee_name = self.function_instance_to_string(tcx, call.callee);
+                    let callee_def_id = call.callee.def_id();
+                    let callee_path = tcx.def_path_str(callee_def_id);
+
+                    // Get actual version information for this callee
+                    let version = get_crate_version(tcx, callee_def_id);
+
+                    // Add callee entry
+                    callees.push(json!({
+                        "name": callee_name,
+                        "version": version,
+                        "path": callee_path,
+                        "constraint_depth": call.constraint_cnt
+                    }));
+                }
+
+                // Get actual version information for caller
+                let caller_version = get_crate_version(tcx, caller_def_id);
+
+                // Calculate the maximum constraint depth
+                let max_constraint_depth =
+                    calls.iter().map(|c| c.constraint_cnt).max().unwrap_or(0);
+
+                // Create the full entry with caller and callees
+                let entry = json!({
+                    "caller": {
+                        "name": caller_name,
+                        "version": caller_version,
+                        "path": caller_path,
+                        "constraint_depth": max_constraint_depth
+                    },
+                    "callee": callees
+                });
+
+                json_entries.push(entry);
+            }
+        }
+
+        // Format the entire array as a pretty-printed JSON string
+        serde_json::to_string_pretty(&json_entries).unwrap_or_else(|_| "[]".to_string())
+    }
+}
+
+// Get version information for a specific DefId from TyCtxt
+fn get_crate_version<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> String {
+    // Get the crate number for this DefId
+    let crate_num = def_id.krate;
+
+    // Try to get the crate name
+    let crate_name = tcx.crate_name(crate_num);
+
+    // Check if we can get version from crate disambiguator (hash)
+    let crate_hash = tcx.crate_hash(crate_num);
+
+    // For built-in crates and std library, we can use the Rust version
+    if crate_num == rustc_hir::def_id::LOCAL_CRATE {
+        // This is the current crate being analyzed
+        // Try to get version from environment if available
+        match option_env!("CARGO_PKG_VERSION") {
+            Some(version) => return version.to_string(),
+            None => {}
+        }
+    }
+
+    // Look for version patterns in the crate name (some crates include version in name)
+    // Format: name-x.y.z
+    let crate_name_str = crate_name.to_string();
+    if let Some(idx) = crate_name_str.rfind('-') {
+        let potential_version = &crate_name_str[idx + 1..];
+        if potential_version
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_digit(10))
+        {
+            return potential_version.to_string();
+        }
+    }
+
+    // If we can't find a proper version, use the crate hash as a unique identifier
+    format!("0.0.0-{}", crate_hash.to_string().split_at(8).0)
 }
 
 #[derive(Debug, Clone)]
@@ -645,6 +768,24 @@ pub fn perform_mono_analysis<'tcx>(
             } else {
                 tracing::info!("Callers output written to: {:?}", output_path);
             }
+        }
+    }
+
+    // If JSON output is requested, write call graph as JSON
+    if options.json_output {
+        let json_output = call_graph.format_call_graph_as_json(tcx);
+
+        // Output to file
+        let output_path = options
+            .output_dir
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("./target"))
+            .join("callgraph.json");
+
+        if let Err(e) = std::fs::write(&output_path, json_output) {
+            tracing::error!("Failed to write JSON call graph to file: {:?}", e);
+        } else {
+            tracing::info!("JSON call graph written to: {:?}", output_path);
         }
     }
 
