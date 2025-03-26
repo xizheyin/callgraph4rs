@@ -142,6 +142,34 @@ call-cg --find-callers-of "std::collections::HashMap::insert"
 
 This will generate a report of all callers in `./target/callers.txt`.
 
+You can also generate a JSON format report by combining with the `--json-output` option:
+
+```bash
+call-cg --find-callers-of "std::collections::HashMap::insert" --json-output
+```
+
+This will output the callers information in JSON format to `./target/callers.json`, which is useful for programmatic processing or visualization.
+
+Example JSON structure for callers:
+```json
+{
+  "target": "std::collections::HashMap::insert",
+  "total_callers": 3,
+  "callers": [
+    {
+      "name": "my_module::my_function",
+      "version": "1.0.0",
+      "path": "my_crate::my_module::my_function"
+    },
+    {
+      "name": "another_function",
+      "version": "0.5.2",
+      "path": "other_crate::another_function"
+    }
+  ]
+}
+```
+
 You can use a partial path - the tool will match any function containing that substring. The matching behavior works as follows:
 
 - If the path includes generic parameters (contains `<` character), it will match against the full function path including generic parameters or the basic path

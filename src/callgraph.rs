@@ -401,6 +401,47 @@ impl<'tcx> CallGraph<'tcx> {
         // Format the entire array as a pretty-printed JSON string
         serde_json::to_string_pretty(&json_entries).unwrap_or_else(|_| "[]".to_string())
     }
+
+    /// Format caller information as JSON
+    pub fn format_callers_as_json(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        target_path: &str,
+        callers: Vec<FunctionInstance<'tcx>>,
+    ) -> String {
+        // Sort callers to get consistent output
+        let mut sorted_callers: Vec<FunctionInstance<'tcx>> = callers;
+        sorted_callers.sort_by_key(|caller| format!("{:?}", caller));
+
+        // Create array for caller information
+        let mut caller_entries = Vec::new();
+
+        for caller in &sorted_callers {
+            let caller_name = self.function_instance_to_string(tcx, *caller);
+            let caller_def_id = caller.def_id();
+            let caller_path = tcx.def_path_str(caller_def_id);
+
+            // Get version information
+            let version = get_crate_version(tcx, caller_def_id);
+
+            // Add caller entry
+            caller_entries.push(json!({
+                "name": caller_name,
+                "version": version,
+                "path": caller_path
+            }));
+        }
+
+        // Create the full result object
+        let result = json!({
+            "target": target_path,
+            "total_callers": sorted_callers.len(),
+            "callers": caller_entries
+        });
+
+        // Format as pretty-printed JSON
+        serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string())
+    }
 }
 
 // Get version information for a specific DefId from TyCtxt
@@ -758,19 +799,37 @@ pub fn perform_mono_analysis<'tcx>(
     if let Some(target_path) = &options.find_callers_of {
         tracing::info!("Finding callers of function: {}", target_path);
         if let Some(callers) = call_graph.find_callers(tcx, target_path) {
-            let callers_output = call_graph.format_callers(tcx, target_path, callers);
-
-            // Output to file
-            let output_path = options
+            // Get output directory
+            let output_dir = options
                 .output_dir
                 .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("./target"))
-                .join("callers.txt");
+                .unwrap_or_else(|| std::path::PathBuf::from("./target"));
 
-            if let Err(e) = std::fs::write(&output_path, callers_output) {
-                tracing::error!("Failed to write callers to file: {:?}", e);
+            // Determine output format (text or JSON)
+            if options.json_output {
+                // Generate JSON output for callers
+                let callers_json = call_graph.format_callers_as_json(tcx, target_path, callers);
+
+                // Output to JSON file
+                let json_output_path = output_dir.join("callers.json");
+
+                if let Err(e) = std::fs::write(&json_output_path, callers_json) {
+                    tracing::error!("Failed to write callers to JSON file: {:?}", e);
+                } else {
+                    tracing::info!("Callers JSON output written to: {:?}", json_output_path);
+                }
             } else {
-                tracing::info!("Callers output written to: {:?}", output_path);
+                // Generate text output for callers (original behavior)
+                let callers_output = call_graph.format_callers(tcx, target_path, callers);
+
+                // Output to text file
+                let output_path = output_dir.join("callers.txt");
+
+                if let Err(e) = std::fs::write(&output_path, callers_output) {
+                    tracing::error!("Failed to write callers to file: {:?}", e);
+                } else {
+                    tracing::info!("Callers output written to: {:?}", output_path);
+                }
             }
         }
     }
