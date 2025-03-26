@@ -13,14 +13,16 @@ pub(crate) struct CallGraph<'tcx> {
     _all_generic_instances: Vec<FunctionInstance<'tcx>>,
     instances: VecDeque<FunctionInstance<'tcx>>,
     pub call_sites: Vec<CallSite<'tcx>>,
+    without_args: bool,
 }
 
 impl<'tcx> CallGraph<'tcx> {
-    fn new(all_generic_instances: Vec<FunctionInstance<'tcx>>) -> Self {
+    fn new(all_generic_instances: Vec<FunctionInstance<'tcx>>, without_args: bool) -> Self {
         Self {
             _all_generic_instances: all_generic_instances.clone(),
             instances: all_generic_instances.into_iter().collect(),
             call_sites: Vec::new(),
+            without_args,
         }
     }
 
@@ -135,10 +137,12 @@ impl<'tcx> CallGraph<'tcx> {
                 let def_id = inst.def_id();
                 // Get readable function name
 
-                // Add generic parameter information, if any
-                if inst.args.len() > 0 {
+                // Determine whether to include generic arguments based on the without_args option
+                if !self.without_args && inst.args.len() > 0 {
+                    // Include generic parameter information
                     tcx.def_path_str_with_args(def_id, inst.args)
                 } else {
+                    // Skip generic parameter information
                     tcx.def_path_str(def_id)
                 }
             }
@@ -726,7 +730,7 @@ pub fn perform_mono_analysis<'tcx>(
     instances: Vec<FunctionInstance<'tcx>>,
     options: &crate::args::CGArgs,
 ) -> CallGraph<'tcx> {
-    let mut call_graph = CallGraph::new(instances);
+    let mut call_graph = CallGraph::new(instances, options.without_args);
     let mut visited = HashSet::new();
 
     while let Some(instance) = call_graph.instances.pop_front() {

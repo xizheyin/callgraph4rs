@@ -42,6 +42,11 @@ pub struct CGArgs {
     /// This provides machine-readable data for further processing
     #[arg(long, default_value_t = false)]
     pub json_output: bool,
+
+    /// Do not include generic type arguments in function paths
+    /// When enabled, function paths will not include generic type parameters
+    #[arg(long, default_value_t = false)]
+    pub without_args: bool,
 }
 
 impl CGArgs {

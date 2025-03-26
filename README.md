@@ -66,6 +66,7 @@ Options:
                                    When enabled, keeps all call sites
       --find-callers-of <FUNCTION_PATH> Find all functions that directly or indirectly call the specified function
       --json-output                Output the call graph in JSON format
+      --without-args               Do not include generic type arguments in function paths
   -h, --help                       Print help
 ```
 
