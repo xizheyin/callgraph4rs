@@ -135,20 +135,29 @@ impl<'tcx> CallGraph<'tcx> {
         match instance {
             FunctionInstance::Instance(inst) => {
                 let def_id = inst.def_id();
-                // Get readable function name
+                // Get readable function name and hash
+                let path_hash = format!("{:?}", tcx.def_path_hash(def_id));
 
                 // Determine whether to include generic arguments based on the without_args option
-                if !self.without_args && inst.args.len() > 0 {
+                let path_str = if !self.without_args && inst.args.len() > 0 {
                     // Include generic parameter information
                     tcx.def_path_str_with_args(def_id, inst.args)
                 } else {
                     // Skip generic parameter information
                     tcx.def_path_str(def_id)
-                }
+                };
+
+                // Append the hash to the path string
+                format!("{} [{}]", path_str, path_hash)
             }
             FunctionInstance::NonInstance(def_id) => {
-                // For non-instances, only show the path
-                format!("{} (non-instance)", tcx.def_path_str(def_id))
+                // For non-instances, only show the path and hash
+                let path_hash = format!("{}", tcx.def_path_hash(def_id).0);
+                format!(
+                    "{} (non-instance) [{}]",
+                    tcx.def_path_str(def_id),
+                    path_hash
+                )
             }
         }
     }
@@ -372,7 +381,8 @@ impl<'tcx> CallGraph<'tcx> {
                         "name": callee_name,
                         "version": version,
                         "path": callee_path,
-                        "constraint_depth": call.constraint_cnt
+                        "constraint_depth": call.constraint_cnt,
+                        "path_hash": format!("{}", tcx.def_path_hash(callee_def_id).0)
                     }));
                 }
 
@@ -389,7 +399,8 @@ impl<'tcx> CallGraph<'tcx> {
                         "name": caller_name,
                         "version": caller_version,
                         "path": caller_path,
-                        "constraint_depth": max_constraint_depth
+                        "constraint_depth": max_constraint_depth,
+                        "path_hash": format!("{}", tcx.def_path_hash(caller_def_id).0)
                     },
                     "callee": callees
                 });
@@ -428,7 +439,8 @@ impl<'tcx> CallGraph<'tcx> {
             caller_entries.push(json!({
                 "name": caller_name,
                 "version": version,
-                "path": caller_path
+                "path": caller_path,
+                "path_hash": format!("{}", tcx.def_path_hash(caller_def_id).0)
             }));
         }
 

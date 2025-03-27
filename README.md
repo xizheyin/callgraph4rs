@@ -101,6 +101,7 @@ The JSON format includes detailed information about each caller and its callees,
 - Paths
 - Version information (extracted from crate metadata)
 - Call constraint depths
+- DefPathHash identifier (unique hash for each function path)
 
 Example JSON structure:
 ```json
@@ -110,20 +111,23 @@ Example JSON structure:
       "name": "example_caller_name",
       "version": "1.0.0",
       "path": "example/path/to/caller",
-      "constraint_depth": 3
+      "constraint_depth": 3,
+      "path_hash": "5a0e836d03d8617a"
     },
     "callee": [
       {
         "name": "example_callee_name_1",
         "version": "1.1.0",
         "path": "example/path/to/callee_1",
-        "constraint_depth": 2
+        "constraint_depth": 2,
+        "path_hash": "8f219f8a15822e31"
       },
       {
         "name": "example_callee_name_2",
         "version": "1.2.0",
         "path": "example/path/to/callee_2",
-        "constraint_depth": 1
+        "constraint_depth": 1,
+        "path_hash": "a7c5151b3c15fd4c"
       }
     ]
   }
@@ -159,12 +163,14 @@ Example JSON structure for callers:
     {
       "name": "my_module::my_function",
       "version": "1.0.0",
-      "path": "my_crate::my_module::my_function"
+      "path": "my_crate::my_module::my_function",
+      "path_hash": "7f21c985b3ab412c"
     },
     {
       "name": "another_function",
       "version": "0.5.2",
-      "path": "other_crate::another_function"
+      "path": "other_crate::another_function",
+      "path_hash": "d23f91e6a0189f50"
     }
   ]
 }
