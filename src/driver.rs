@@ -100,11 +100,7 @@ impl rustc_driver::Callbacks for CGCallbacks {
     ) -> Compilation {
         tracing::info!("{}", "Entering after_analysis callback");
 
-        let generic_instances = callgraph::collect_generic_instances(tcx);
-
-        // Pass the plugin args to the analysis function
-        let call_graph =
-            callgraph::perform_mono_analysis(tcx, generic_instances, &self.plugin_args);
+        let callgraph = callgraph::analyze_crate(tcx, &self.plugin_args);
 
         // 获取当前 crate 名称
         let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string();
@@ -118,7 +114,7 @@ impl rustc_driver::Callbacks for CGCallbacks {
         let output_path = output_dir.join(format!("{}-callgraph.txt", crate_name));
 
         // 获取格式化的调用图输出
-        let formatted_callgraph = call_graph.format_call_graph(tcx);
+        let formatted_callgraph = callgraph.format_call_graph(tcx);
 
         // 写入调用图到文件
         match write_to_file(&output_path, |file| write!(file, "{}", formatted_callgraph)) {
@@ -129,7 +125,7 @@ impl rustc_driver::Callbacks for CGCallbacks {
         // 为了方便调试，也可以创建一个包含原始数据的文件
         let debug_path = output_dir.join(format!("{}-callgraph-debug.txt", crate_name));
         let _ = write_to_file(&debug_path, |file| {
-            writeln!(file, "call_graph: {:#?}", call_graph.call_sites)
+            writeln!(file, "call_graph: {:#?}", callgraph.call_sites)
         });
 
         tracing::info!("{}", "Exiting after_analysis callback");

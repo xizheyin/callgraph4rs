@@ -1,10 +1,11 @@
 use crate::callgraph::utils::get_crate_version;
-use crate::callgraph::{CallGraph, FunctionInstance};
+use crate::callgraph::CallGraph;
 use rustc_middle::ty::TyCtxt;
 use serde_json::json;
 use std::collections::HashMap;
 
-use super::CallSite;
+use super::function::FunctionInstance;
+use super::types::CallSite;
 
 impl<'tcx> CallGraph<'tcx> {
     /// Convert function instance to readable string
@@ -56,7 +57,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         for call_site in &self.call_sites {
             calls_by_caller
-                .entry(call_site._caller)
+                .entry(call_site.caller())
                 .or_default()
                 .push(call_site);
         }
@@ -75,19 +76,20 @@ impl<'tcx> CallGraph<'tcx> {
                 // Sort by callee and constraint count
                 let mut sorted_calls = calls.clone();
                 sorted_calls.sort_by(|a, b| {
-                    let a_name = self.function_instance_to_string(tcx, a.callee);
-                    let b_name = self.function_instance_to_string(tcx, b.callee);
+                    let a_name = self.function_instance_to_string(tcx, a.callee());
+                    let b_name = self.function_instance_to_string(tcx, b.callee());
                     a_name
                         .cmp(&b_name)
-                        .then_with(|| a.constraint_cnt.cmp(&b.constraint_cnt))
+                        .then_with(|| a.constraint_count().cmp(&b.constraint_count()))
                 });
 
                 // Output call information
                 for call in sorted_calls {
-                    let callee_name = self.function_instance_to_string(tcx, call.callee);
+                    let callee_name = self.function_instance_to_string(tcx, call.callee());
                     result.push_str(&format!(
                         "  -> {} [constraint: {}]\n",
-                        callee_name, call.constraint_cnt
+                        callee_name,
+                        call.constraint_count()
                     ));
                 }
 
@@ -137,7 +139,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         for call_site in &self.call_sites {
             calls_by_caller
-                .entry(call_site._caller)
+                .entry(call_site.caller())
                 .or_default()
                 .push(call_site);
         }
@@ -160,18 +162,18 @@ impl<'tcx> CallGraph<'tcx> {
                 // Sort by callee for consistent output
                 let mut sorted_calls = calls.clone();
                 sorted_calls.sort_by(|a, b| {
-                    let a_name = self.function_instance_to_string(tcx, a.callee);
-                    let b_name = self.function_instance_to_string(tcx, b.callee);
+                    let a_name = self.function_instance_to_string(tcx, a.callee());
+                    let b_name = self.function_instance_to_string(tcx, b.callee());
                     a_name
                         .cmp(&b_name)
-                        .then_with(|| a.constraint_cnt.cmp(&b.constraint_cnt))
+                        .then_with(|| a.constraint_count().cmp(&b.constraint_count()))
                 });
 
                 // Create an array of callee objects
                 let mut callees = Vec::new();
                 for call in sorted_calls {
-                    let callee_name = self.function_instance_to_string(tcx, call.callee);
-                    let callee_def_id = call.callee.def_id();
+                    let callee_name = self.function_instance_to_string(tcx, call.callee());
+                    let callee_def_id = call.callee().def_id();
                     let callee_path = tcx.def_path_str(callee_def_id);
 
                     // Get actual version information for this callee
@@ -182,7 +184,7 @@ impl<'tcx> CallGraph<'tcx> {
                         "name": callee_name,
                         "version": version,
                         "path": callee_path,
-                        "constraint_depth": call.constraint_cnt,
+                        "constraint_depth": call.constraint_count(),
                         "path_hash": format!("{}", tcx.def_path_hash(callee_def_id).0)
                     }));
                 }
@@ -191,8 +193,11 @@ impl<'tcx> CallGraph<'tcx> {
                 let caller_version = get_crate_version(tcx, caller_def_id);
 
                 // Calculate the maximum constraint depth
-                let max_constraint_depth =
-                    calls.iter().map(|c| c.constraint_cnt).max().unwrap_or(0);
+                let max_constraint_depth = calls
+                    .iter()
+                    .map(|c| c.constraint_count())
+                    .max()
+                    .unwrap_or(0);
 
                 // Create the full entry with caller and callees
                 let entry = json!({
