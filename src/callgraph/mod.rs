@@ -4,7 +4,7 @@ use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
     ty::{self},
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::constraint_utils::{self, BlockPath};
