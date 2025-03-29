@@ -68,6 +68,7 @@ Options:
       --find-callers-of <FUNCTION_PATH> Find all functions that directly or indirectly call the specified function
       --json-output                Output the call graph in JSON format
       --without-args               Do not include generic type arguments in function paths
+      --timer-output <TIMER_OUTPUT> Output file for timing information
   -h, --help                       Print help
 ```
 
@@ -227,6 +228,43 @@ call-cg --find-callers-by-hash "8f219f8a15822e31" --json-output
 The results will be available in `./target/callers_by_hash.txt` or `./target/callers_by_hash.json`.
 
 > **Note**: The `--find-callers-of` and `--find-callers-by-hash` options are mutually exclusive. If both are specified, `--find-callers-of` will be used and `--find-callers-by-hash` will be ignored.
+
+### Performance Timing
+
+The tool includes a built-in timing system that measures execution time of various components:
+
+```bash
+# Use default timing output file (./target/cg_timing.txt)
+call-cg
+
+# Specify a custom timing output file
+call-cg --timer-output ./my_timing_report.txt
+```
+
+The timing report includes detailed information about:
+- Overall execution time
+- Time spent in various phases (collecting instances, monomorphization analysis)
+- Time for individual operations (finding callers, deduplication)
+
+This is useful for performance profiling and identifying bottlenecks in large codebases.
+
+Example timing report:
+```
+Timer Report - 2023-05-15 14:30:45 +0800
+------------------------------------------------------------
+Timer Name                       | Count      | Total (ms)     | Avg (ms)       
+------------------------------------------------------------
+overall_execution                | 1          | 5430.25        | 5430.25        
+rustc_driver_execution           | 1          | 5420.15        | 5420.15        
+call_graph_analysis              | 1          | 4560.35        | 4560.35        
+collect_generic_instances        | 1          | 245.78         | 245.78         
+perform_mono_analysis            | 1          | 3950.45        | 3950.45        
+compute_constraints              | 1532       | 825.32         | 0.54           
+extract_function_call            | 1532       | 2450.67        | 1.60           
+instance_callsites               | 1532       | 3285.43        | 2.14           
+deduplicate_call_sites           | 1          | 120.43         | 120.43         
+------------------------------------------------------------
+```
 
 ## Testing
 

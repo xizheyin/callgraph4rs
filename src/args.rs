@@ -52,6 +52,11 @@ pub struct CGArgs {
     /// When enabled, function paths will not include generic type parameters
     #[arg(long, default_value_t = false)]
     pub without_args: bool,
+
+    /// Output file for timing information
+    /// When specified, will write detailed timing information to this file
+    #[arg(long)]
+    pub timer_output: Option<PathBuf>,
 }
 
 impl CGArgs {

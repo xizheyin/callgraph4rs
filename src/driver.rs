@@ -4,11 +4,13 @@ use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
 use std::borrow::Cow;
 use std::env;
+use std::path::PathBuf;
 use std::process::Command;
 use std::str;
 
 use crate::args::{AllCliArgs, CGArgs};
 use crate::callgraph;
+use crate::timer::Timer;
 use rustc_compat::{CrateFilter, Plugin, RustcPluginArgs, Utf8Path};
 
 #[derive(Default)]
@@ -47,9 +49,39 @@ impl Plugin for CGDriver {
     // In the driver, we use the Rustc API to start a compiler session
     // for the arguments given to us by rustc_plugin.
     fn run(self, compiler_args: Vec<String>, plugin_args: Self::PluginArgs) {
+        // Set up timer output file
+        let timer_output_path = if let Some(timer_path) = &plugin_args.timer_output {
+            timer_path.clone()
+        } else {
+            plugin_args
+                .output_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("./target"))
+                .join("cg_timing.txt")
+        };
+
+        Timer::set_output_file(
+            timer_output_path
+                .to_str()
+                .unwrap_or("./target/cg_timing.txt"),
+        );
+
+        // Start overall timer
+        Timer::start("overall_execution");
+
         tracing::debug!("Rust CG start to run.");
         let mut callbacks = CGCallbacks::new(plugin_args);
-        rustc_driver::run_compiler(&compiler_args, &mut callbacks);
+
+        // Record rustc_driver execution time
+        crate::timer::measure("rustc_driver_execution", || {
+            rustc_driver::run_compiler(&compiler_args, &mut callbacks)
+        });
+
+        // Stop overall timer and write results to file
+        Timer::stop("overall_execution");
+        if let Err(e) = Timer::write_to_file() {
+            tracing::error!("Failed to write timer results to file: {:?}", e);
+        }
     }
 }
 
@@ -71,7 +103,10 @@ impl rustc_driver::Callbacks for CGCallbacks {
     ) -> Compilation {
         tracing::info!("{}", "Entering after_analysis callback");
 
-        callgraph::analyze_crate(tcx, &self.plugin_args);
+        // Time the call graph analysis
+        crate::timer::measure("call_graph_analysis", || {
+            callgraph::analyze_crate(tcx, &self.plugin_args)
+        });
 
         tracing::info!("{}", "Exiting after_analysis callback");
         Compilation::Continue

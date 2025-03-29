@@ -4,6 +4,7 @@ mod function;
 mod types;
 mod utils;
 
+use crate::timer::Timer;
 use analysis::perform_mono_analysis;
 use fmt::{output_call_graph_result, output_callers_result};
 use function::FunctionInstance;
@@ -16,33 +17,62 @@ pub fn analyze_crate<'tcx>(
     options: &crate::args::CGArgs,
 ) -> CallGraph<'tcx> {
     // Collect all generic instances in the crate
-    let instances = function::collect_generic_instances(tcx);
+    let instances = crate::timer::measure("collect_generic_instances", || {
+        function::collect_generic_instances(tcx)
+    });
+
+    // Log the number of instances found
+    tracing::info!("Collected {} generic instances", instances.len());
 
     // Perform monomorphization analysis
-    let call_graph = perform_mono_analysis(tcx, instances, options);
+    let call_graph = crate::timer::measure("perform_mono_analysis", || {
+        perform_mono_analysis(tcx, instances, options)
+    });
+
+    // Log call site count
+    tracing::info!("Found {} call sites", call_graph.call_sites.len());
 
     // Handle find_callers_of and find_callers_by_hash options (mutually exclusive)
     match (&options.find_callers, &options.find_callers_by_hash) {
         (Some(target_path), None) => {
             // Only find_callers_of is specified
             tracing::info!("Finding callers of function: {}", target_path);
+            Timer::start("find_callers_by_path");
             if let Some(callers) = call_graph.find_callers_by_path(tcx, target_path) {
-                output_callers_result(&call_graph, tcx, target_path, callers, options, "callers");
+                Timer::stop("find_callers_by_path");
+                crate::timer::measure("output_callers_result", || {
+                    output_callers_result(
+                        &call_graph,
+                        tcx,
+                        target_path,
+                        callers,
+                        options,
+                        "callers",
+                    )
+                });
+            } else {
+                Timer::stop("find_callers_by_path");
             }
         }
         (None, Some(target_hash)) => {
             // Only find_callers_by_hash is specified
             tracing::info!("Finding callers of function with hash: {}", target_hash);
+            Timer::start("find_callers_by_hash");
             if let Some(callers) = call_graph.find_callers_by_hash(tcx, target_hash) {
+                Timer::stop("find_callers_by_hash");
                 let target_display = format!("function with hash: {}", target_hash);
-                output_callers_result(
-                    &call_graph,
-                    tcx,
-                    &target_display,
-                    callers,
-                    options,
-                    "callers_by_hash",
-                );
+                crate::timer::measure("output_callers_result", || {
+                    output_callers_result(
+                        &call_graph,
+                        tcx,
+                        &target_display,
+                        callers,
+                        options,
+                        "callers_by_hash",
+                    )
+                });
+            } else {
+                Timer::stop("find_callers_by_hash");
             }
         }
         (Some(_), Some(_)) => {
@@ -60,23 +90,27 @@ pub fn analyze_crate<'tcx>(
 
     // If JSON output is requested, write call graph as JSON
     if options.json_output {
-        let json_output = call_graph.format_call_graph_as_json(tcx);
+        crate::timer::measure("format_and_write_json", || {
+            let json_output = call_graph.format_call_graph_as_json(tcx);
 
-        // Output to file
-        let output_path = options
-            .output_dir
-            .clone()
-            .unwrap_or_else(|| std::path::PathBuf::from("./target"))
-            .join("callgraph.json");
+            // Output to file
+            let output_path = options
+                .output_dir
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("./target"))
+                .join("callgraph.json");
 
-        if let Err(e) = std::fs::write(&output_path, json_output) {
-            tracing::error!("Failed to write JSON call graph to file: {:?}", e);
-        } else {
-            tracing::info!("JSON call graph written to: {:?}", output_path);
-        }
+            if let Err(e) = std::fs::write(&output_path, json_output) {
+                tracing::error!("Failed to write JSON call graph to file: {:?}", e);
+            } else {
+                tracing::info!("JSON call graph written to: {:?}", output_path);
+            }
+        });
     }
 
-    output_call_graph_result(&call_graph, tcx, options);
+    crate::timer::measure("output_call_graph_result", || {
+        output_call_graph_result(&call_graph, tcx, options)
+    });
 
     call_graph
 }

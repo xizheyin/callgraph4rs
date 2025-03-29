@@ -7,6 +7,7 @@ use rustc_middle::{
 };
 
 use crate::constraint_utils::{self, BlockPath};
+use crate::timer;
 
 use super::{function::FunctionInstance, types::CallSite, CallGraph};
 
@@ -23,8 +24,16 @@ impl<'tcx> FunctionInstance<'tcx> {
             tracing::warn!("skip nobody function: {:?}", def_id);
             return Vec::new();
         }
-        let constraints = super::analysis::get_constraints(tcx, def_id);
-        self.extract_function_call(tcx, &def_id, constraints)
+
+        // Time constraint computation
+        let constraints = timer::measure("compute_constraints", || {
+            super::analysis::get_constraints(tcx, def_id)
+        });
+
+        // Time function call extraction
+        timer::measure("extract_function_call", || {
+            self.extract_function_call(tcx, &def_id, constraints)
+        })
     }
 
     /// Extract information about all function calls in `function`
@@ -229,6 +238,12 @@ pub(crate) fn perform_mono_analysis<'tcx>(
 ) -> CallGraph<'tcx> {
     let mut call_graph = CallGraph::new(instances, options.without_args);
     let mut visited = HashSet::new();
+    let mut total_call_sites = 0;
+
+    // Track processing progress with timestamps
+    let start_time = std::time::Instant::now();
+    let mut last_progress_time = start_time;
+    let progress_interval = std::time::Duration::from_secs(5);
 
     while let Some(instance) = call_graph.instances.pop_front() {
         if visited.contains(&instance) {
@@ -236,17 +251,44 @@ pub(crate) fn perform_mono_analysis<'tcx>(
         }
         visited.insert(instance);
 
-        let call_sites = instance.collect_callsites(tcx);
+        // Time collection of call sites for each instance
+        let call_sites = timer::measure("instance_callsites", || instance.collect_callsites(tcx));
+
+        total_call_sites += call_sites.len();
+
+        // Log progress periodically
+        let now = std::time::Instant::now();
+        if now.duration_since(last_progress_time) > progress_interval {
+            tracing::info!(
+                "Analysis progress: {} instances analyzed, {} call sites found, {} in queue",
+                visited.len(),
+                total_call_sites,
+                call_graph.instances.len()
+            );
+            last_progress_time = now;
+        }
+
         for call_site in call_sites {
             call_graph.instances.push_back(call_site.callee());
             call_graph.call_sites.push(call_site);
         }
     }
 
+    // Log final statistics
+    let elapsed = start_time.elapsed();
+    tracing::info!(
+        "Analysis complete: {} instances analyzed, {} call sites found in {:?}",
+        visited.len(),
+        total_call_sites,
+        elapsed
+    );
+
     // Deduplicate call sites if deduplication is not disabled
     if !options.no_dedup {
         tracing::info!("Deduplication enabled - removing duplicate call sites");
-        call_graph.deduplicate_call_sites();
+        timer::measure("deduplicate_call_sites", || {
+            call_graph.deduplicate_call_sites()
+        });
     } else {
         tracing::info!("Deduplication disabled - keeping all call sites");
     }

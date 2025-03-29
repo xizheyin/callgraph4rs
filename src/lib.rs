@@ -22,3 +22,5 @@ mod driver;
 /// driver
 pub use driver::CGDriver;
 mod constraint_utils;
+/// timer module for measuring execution time
+pub mod timer;
