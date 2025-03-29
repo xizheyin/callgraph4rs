@@ -57,6 +57,11 @@ pub struct CGArgs {
     /// When specified, will write detailed timing information to this file
     #[arg(long)]
     pub timer_output: Option<PathBuf>,
+
+    /// Enable debug mode
+    /// When enabled, will print debug information
+    #[arg(long, default_value_t = false)]
+    pub cg_debug: bool,
 }
 
 impl CGArgs {

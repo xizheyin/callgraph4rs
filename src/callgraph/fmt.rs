@@ -274,10 +274,12 @@ pub(crate) fn output_call_graph_result<'tcx>(
         Err(e) => tracing::error!("Failed to write call graph: {}", e),
     }
 
-    let debug_path = output_dir.join(format!("{}-callgraph-debug.txt", crate_name));
-    let _ = write_to_file(&debug_path, |file| {
-        writeln!(file, "call_graph: {:#?}", call_graph.call_sites)
-    });
+    if options.cg_debug {
+        let debug_path = output_dir.join(format!("{}-callgraph-debug.txt", crate_name));
+        let _ = write_to_file(&debug_path, |file| {
+            writeln!(file, "call_graph: {:#?}", call_graph.call_sites)
+        });
+    }
 }
 
 // Helper function to output callers result (reduces code duplication)
