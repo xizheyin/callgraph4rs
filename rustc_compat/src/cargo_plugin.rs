@@ -167,9 +167,11 @@ fn only_run_on_file(
                                 .find(|target| target.kind.contains(&"bin".into()))
                         } else {
                             let kind = (if stem == "main" { "bin" } else { "lib" }).to_string();
-                            targets
-                                .into_iter()
-                                .find(|target| target.kind.contains(&kind))
+                            targets.into_iter().find(|target| {
+                                target
+                                    .kind
+                                    .contains(&cargo_metadata::TargetKind::from(kind.as_str()))
+                            })
                         }
                     })
                 }
@@ -196,7 +198,7 @@ fn only_run_on_file(
     }
 
     // 根据目标类型设置编译选项
-    let kind_str = &target.kind[0];
+    let kind_str = &target.kind[0].to_string();
     let kind = match kind_str.as_str() {
         "lib" | "rlib" | "dylib" | "staticlib" | "cdylib" => CompileKind::Lib,
         "bin" => CompileKind::Bin,
