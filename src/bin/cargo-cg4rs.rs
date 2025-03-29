@@ -1,6 +1,6 @@
 #![feature(rustc_private)]
 
-use cg::CGDriver;
+use cg4rs::CGDriver;
 use rustc_compat::cargo_main;
 
 fn main() {

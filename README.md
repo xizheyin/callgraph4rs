@@ -11,7 +11,7 @@ This tool allows you to generate a call graph for your Rust project, which can h
 
 ## Installation
 
-Install `cg`, `cargo-cg`, and `call-cg` by running:
+Install `cg`, `cargo-cg`, and `call-cg4rs` by running:
 
 ```bash
 cargo install --path .
@@ -24,7 +24,7 @@ cargo install --path .
 Navigate to your project directory and run:
 
 ```bash
-call-cg
+call-cg4rs
 ```
 
 This will generate a call graph and save it to `./target/callgraph.txt`.
@@ -37,7 +37,7 @@ By default, the deduplication feature is enabled. This feature removes duplicate
 To disable deduplication and show all call paths:
 
 ```bash
-call-cg --no-dedup
+call-cg4rs --no-dedup
 ```
 
 ### Options
@@ -45,7 +45,7 @@ call-cg --no-dedup
 To see all available options:
 
 ```bash
-call-cg -h
+call-cg4rs -h
 ```
 
 Output:
@@ -96,14 +96,14 @@ Options:
 
 ```bash
 cd test_directory
-call-cg
+call-cg4rs
 # Call graph will be available at ./target/callgraph.txt
 ```
 
 ### Using Custom Output Directory
 
 ```bash
-call-cg -o ./custom_output
+call-cg4rs -o ./custom_output
 # Call graph will be available at ./custom_output/callgraph.txt
 ```
 
@@ -112,7 +112,7 @@ call-cg -o ./custom_output
 For machine-readable output that can be processed by other tools:
 
 ```bash
-call-cg --json-output
+call-cg4rs --json-output
 # JSON output will be available at ./target/callgraph.json
 ```
 
@@ -161,7 +161,7 @@ This format is ideal for further processing or visualization with external tools
 To find all functions that directly or indirectly call a specific function:
 
 ```bash
-call-cg --find-callers-of "std::collections::HashMap::insert"
+call-cg4rs --find-callers-of "std::collections::HashMap::insert"
 ```
 
 This will generate a report of all callers in `./target/callers.txt`. The report includes each caller function along with its path constraints count, which represents the accumulated number of control flow constraints along the shortest calling path.
@@ -169,7 +169,7 @@ This will generate a report of all callers in `./target/callers.txt`. The report
 You can also generate a JSON format report by combining with the `--json-output` option:
 
 ```bash
-call-cg --find-callers-of "std::collections::HashMap::insert" --json-output
+call-cg4rs --find-callers-of "std::collections::HashMap::insert" --json-output
 ```
 
 This will output the callers information in JSON format to `./target/callers.json`, which is useful for programmatic processing or visualization.
@@ -209,20 +209,20 @@ Examples:
 ```bash
 # Match any DataStore::total_value regardless of generic parameters
 # This will remove all generic parts from paths when matching
-call-cg --find-callers-of "DataStore::total_value"
+call-cg4rs --find-callers-of "DataStore::total_value"
 
 # Find callers of other crates
-call-cg --find-callers-of "std::collections::HashMap::new"
+call-cg4rs --find-callers-of "std::collections::HashMap::new"
 
 # Match only functions that contain this specific generic instantiation in their path
 # Using precise generic parameter syntax to match specific instances
-RUST_LOG=off call-cg --find-callers-of "DataStore::<Electronics>::total_value"
+RUST_LOG=off call-cg4rs --find-callers-of "DataStore::<Electronics>::total_value"
 
 # Find all callers of HashMap::new method from standard library, using full generic path
-RUST_LOG=off call-cg --find-callers-of "std::collections::HashMap::<K, V>::new"
+RUST_LOG=off call-cg4rs --find-callers-of "std::collections::HashMap::<K, V>::new"
 
 # Find callers using the exact DefPathHash (more precise than path matching)
-call-cg --find-callers-by-hash "8f219f8a15822e31"
+call-cg4rs --find-callers-by-hash "8f219f8a15822e31"
 ```
 
 ### Finding Functions by DefPathHash
@@ -230,7 +230,7 @@ call-cg --find-callers-by-hash "8f219f8a15822e31"
 For precise function lookup, you can use the `--find-callers-by-hash` option with the DefPathHash value:
 
 ```bash
-call-cg --find-callers-by-hash "8f219f8a15822e31"
+call-cg4rs --find-callers-by-hash "8f219f8a15822e31"
 ```
 
 This approach provides a more reliable way to find functions than using paths, especially when:
@@ -244,7 +244,7 @@ is displayed with its hash in square brackets, e.g., `DataStore::total_value [8f
 This can also be combined with the `--json-output` option to get a JSON representation:
 
 ```bash
-call-cg --find-callers-by-hash "8f219f8a15822e31" --json-output
+call-cg4rs --find-callers-by-hash "8f219f8a15822e31" --json-output
 ```
 
 The results will be available in `./target/callers_by_hash.txt` or `./target/callers_by_hash.json`.
@@ -257,10 +257,10 @@ The tool includes a built-in timing system that measures execution time of vario
 
 ```bash
 # Use default timing output file (./target/cg_timing.txt)
-call-cg
+call-cg4rs
 
 # Specify a custom timing output file
-call-cg --timer-output ./my_timing_report.txt
+call-cg4rs --timer-output ./my_timing_report.txt
 ```
 
 The timing report includes detailed information about:
@@ -311,22 +311,22 @@ This repository includes a test project (`test_callgraph`) designed to test the 
 
 4. Run the call graph analyzer:
    ```bash
-   call-cg
+   call-cg4rs
    ```
    This will generate a call graph at `./target/callgraph.txt`.
 
 5. Try finding callers of specific functions, for example:
    ```bash
    # Find all callers of Product::discounted_price
-   call-cg --find-callers-of "Product::discounted_price"
+   call-cg4rs --find-callers-of "Product::discounted_price"
    
    # Find all callers of DataStore::calculate_value_with_strategy
-   call-cg --find-callers-of "DataStore::calculate_value_with_strategy"
+   call-cg4rs --find-callers-of "DataStore::calculate_value_with_strategy"
    ```
 
 6. To see all possible call paths without deduplication:
    ```bash
-   call-cg --no-dedup
+   call-cg4rs --no-dedup
    ```
 
 For detailed information about the test project structure and specific test cases, please refer to the documentation in the `test_callgraph` directory.
