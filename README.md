@@ -337,7 +337,7 @@ If you use this tool in academic research or other publications, please cite it 
 
 ### BibTeX
 ```bibtex
-@software{rust_call_graph,
+@software{callgraph4rs,
   author = {Yin, Xizhe},
   title = {Rust Call Graph Generator},
   url = {https://github.com/xizheyin/callgraph4rs},
