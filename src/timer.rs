@@ -255,7 +255,7 @@ fn write_timers_to_file(
 ///
 /// # Example
 /// ```
-/// use crate::timer::Timer;
+/// use cg4rs::timer::Timer;
 ///
 /// let result = Timer::measure("my_operation", || {
 ///     // code to measure
