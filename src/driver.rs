@@ -67,18 +67,16 @@ impl Plugin for CGDriver {
         );
 
         // Start overall timer
-        Timer::start("overall_execution");
+        Timer::start("Overall_execution");
 
         tracing::debug!("Rust CG start to run.");
         let mut callbacks = CGCallbacks::new(plugin_args);
 
         // Record rustc_driver execution time
-        crate::timer::measure("rustc_driver_execution", || {
-            rustc_driver::run_compiler(&compiler_args, &mut callbacks)
-        });
+        rustc_driver::run_compiler(&compiler_args, &mut callbacks);
 
         // Stop overall timer and write results to file
-        Timer::stop("overall_execution");
+        Timer::stop("Overall_execution");
         if let Err(e) = Timer::write_to_file() {
             tracing::error!("Failed to write timer results to file: {:?}", e);
         }
@@ -103,10 +101,7 @@ impl rustc_driver::Callbacks for CGCallbacks {
     ) -> Compilation {
         tracing::info!("{}", "Entering after_analysis callback");
 
-        // Time the call graph analysis
-        crate::timer::measure("call_graph_analysis", || {
-            callgraph::analyze_crate(tcx, &self.plugin_args)
-        });
+        callgraph::analyze_crate(tcx, &self.plugin_args);
 
         tracing::info!("{}", "Exiting after_analysis callback");
         Compilation::Continue

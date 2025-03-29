@@ -267,11 +267,29 @@ pub(crate) fn output_call_graph_result<'tcx>(
         .unwrap_or_else(|| std::path::PathBuf::from("./target"));
     let output_path = output_dir.join(format!("{}-callgraph.txt", crate_name));
 
-    let formatted_callgraph = call_graph.format_call_graph(tcx);
+    // If JSON output is requested, write call graph as JSON
+    if options.json_output {
+        let json_output = call_graph.format_call_graph_as_json(tcx);
 
-    match write_to_file(&output_path, |file| write!(file, "{}", formatted_callgraph)) {
-        Ok(_) => tracing::info!("Call graph written to {}", output_path.display()),
-        Err(e) => tracing::error!("Failed to write call graph: {}", e),
+        // Output to file
+        let output_path = options
+            .output_dir
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("./target"))
+            .join("callgraph.json");
+
+        if let Err(e) = std::fs::write(&output_path, json_output) {
+            tracing::error!("Failed to write JSON call graph to file: {:?}", e);
+        } else {
+            tracing::info!("JSON call graph written to: {:?}", output_path);
+        }
+    } else {
+        let formatted_callgraph = call_graph.format_call_graph(tcx);
+
+        match write_to_file(&output_path, |file| write!(file, "{}", formatted_callgraph)) {
+            Ok(_) => tracing::info!("Call graph written to {}", output_path.display()),
+            Err(e) => tracing::error!("Failed to write call graph: {}", e),
+        }
     }
 
     if options.cg_debug {

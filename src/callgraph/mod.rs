@@ -88,26 +88,6 @@ pub fn analyze_crate<'tcx>(
         }
     }
 
-    // If JSON output is requested, write call graph as JSON
-    if options.json_output {
-        crate::timer::measure("format_and_write_json", || {
-            let json_output = call_graph.format_call_graph_as_json(tcx);
-
-            // Output to file
-            let output_path = options
-                .output_dir
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("./target"))
-                .join("callgraph.json");
-
-            if let Err(e) = std::fs::write(&output_path, json_output) {
-                tracing::error!("Failed to write JSON call graph to file: {:?}", e);
-            } else {
-                tracing::info!("JSON call graph written to: {:?}", output_path);
-            }
-        });
-    }
-
     crate::timer::measure("output_call_graph_result", || {
         output_call_graph_result(&call_graph, tcx, options)
     });
@@ -116,7 +96,6 @@ pub fn analyze_crate<'tcx>(
 }
 
 pub(crate) struct CallGraph<'tcx> {
-    _all_generic_instances: Vec<FunctionInstance<'tcx>>,
     instances: VecDeque<FunctionInstance<'tcx>>,
     pub call_sites: Vec<CallSite<'tcx>>,
     without_args: bool,
@@ -125,7 +104,6 @@ pub(crate) struct CallGraph<'tcx> {
 impl<'tcx> CallGraph<'tcx> {
     fn new(all_generic_instances: Vec<FunctionInstance<'tcx>>, without_args: bool) -> Self {
         Self {
-            _all_generic_instances: all_generic_instances.clone(),
             instances: all_generic_instances.into_iter().collect(),
             call_sites: Vec::new(),
             without_args,

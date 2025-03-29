@@ -58,18 +58,32 @@ Arguments:
   [CARGO_ARGS]...  Arguments passed to cargo rust-analyzer
 
 Options:
-      --show-all-funcs             Show all functions
-      --show-all-mir               Show all MIR
-      --emit-mir                   Emit MIR
-      --entry-point <ENTRY_POINT>  Entry point of the program
-  -o, --output-dir <OUTPUT_DIR>    Output directory
-      --no-dedup                   Disable deduplication of call sites for the same caller-callee pair
-                                   When enabled, keeps all call sites
-      --find-callers-of <FUNCTION_PATH> Find all functions that directly or indirectly call the specified function
-      --json-output                Output the call graph in JSON format
-      --without-args               Do not include generic type arguments in function paths
-      --timer-output <TIMER_OUTPUT> Output file for timing information
-  -h, --help                       Print help
+      --show-all-funcs
+          Show all functions
+      --show-all-mir
+          Show all MIR
+      --emit-mir
+          Emit MIR
+      --entry-point <ENTRY_POINT>
+          Entry point of the program
+  -o, --output-dir <OUTPUT_DIR>
+          Output directory
+      --no-dedup
+          No deduplication for call sites When enabled, keeps all call sites for the same caller-callee pair
+      --find-callers <FIND_CALLERS>
+          Find all callers of the specified function path When specified, will output all functions that directly or indirectly call this function
+      --find-callers-by-hash <FIND_CALLERS_BY_HASH>
+          Find all callers of function with the specified def_path_hash When specified, will output all functions that directly or indirectly call the function with this hash
+      --json-output
+          Output the call graph as JSON format This provides machine-readable data for further processing
+      --without-args
+          Do not include generic type arguments in function paths When enabled, function paths will not include generic type parameters
+      --timer-output <TIMER_OUTPUT>
+          Output file for timing information When specified, will write detailed timing information to this file
+      --cg-debug
+          Enable debug mode When enabled, will print debug information
+  -h, --help
+          Print help
 ```
 
 ## Examples
