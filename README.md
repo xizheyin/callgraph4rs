@@ -288,33 +288,6 @@ deduplicate_call_sites           | 1          | 120.43         | 120.43
 ------------------------------------------------------------
 ```
 
-### Call Count Statistics
-
-You can generate call count statistics to analyze function call frequencies and relationships:
-
-```bash
-# Generate basic call count statistics (./target/count-callgraph.txt)
-call-cg --count-calls
-
-# Generate detailed caller-callee relationships (./target/count-callgraph-debug.txt)
-call-cg --count-debug
-
-# Generate both statistics files
-call-cg --count-calls --count-debug
-```
-
-The basic statistics file (`count-callgraph.txt`) includes:
-- Most frequently called functions
-- Top callers (functions that call the most other functions)
-- Most widely used functions (called by the most other functions)
-
-The detailed debug file (`count-callgraph-debug.txt`) provides:
-- Complete caller-to-callee relationships for each function
-- Complete callee-to-caller relationships for each function
-- Call counts for each relationship
-
-This information is valuable for understanding your codebase's structure, identifying hot paths, and detecting potential refactoring opportunities.
-
 ## Testing
 
 This repository includes a test project (`test_callgraph`) designed to test the call graph generation capabilities. It contains a sample Rust program with complex call relationships involving traits, generics, closures, and more.
@@ -357,6 +330,22 @@ This repository includes a test project (`test_callgraph`) designed to test the 
    ```
 
 For detailed information about the test project structure and specific test cases, please refer to the documentation in the `test_callgraph` directory.
+
+## Citing This Project
+
+If you use this tool in academic research or other publications, please cite it using one of the following formats:
+
+### BibTeX
+```bibtex
+@software{rust_call_graph,
+  author = {Yin, Xizhe},
+  title = {Rust Call Graph Generator},
+  url = {https://github.com/xizheyin/callgraph4rs},
+  year = {2025},
+  description = {A tool for generating and analyzing call graphs for Rust projects}
+}
+```
+
 
 ## License
 
