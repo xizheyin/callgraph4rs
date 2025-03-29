@@ -1,14 +1,211 @@
 use std::collections::{HashMap, HashSet};
 
-use rustc_hir::def_id::DefId;
+use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
-    mir,
+    mir::{self, Terminator, TerminatorKind},
     ty::{self, Instance, TyCtxt, TypeFoldable, TypingEnv},
 };
 
 use crate::constraint_utils::{self, BlockPath};
 
-use super::{function::FunctionInstance, CallGraph};
+use super::{function::FunctionInstance, types::CallSite, CallGraph};
+
+impl<'tcx> FunctionInstance<'tcx> {
+    pub(crate) fn collect_callsites(&self, tcx: ty::TyCtxt<'tcx>) -> Vec<CallSite<'tcx>> {
+        let def_id = self.def_id();
+
+        if self.is_non_instance() {
+            tracing::warn!("skip non-instance function: {:?}", self);
+            return Vec::new();
+        }
+
+        if !tcx.is_mir_available(def_id) {
+            tracing::warn!("skip nobody function: {:?}", def_id);
+            return Vec::new();
+        }
+        let constraints = super::analysis::get_constraints(tcx, def_id);
+        self.extract_function_call(tcx, &def_id, constraints)
+    }
+
+    /// Extract information about all function calls in `function`
+    fn extract_function_call(
+        &self,
+        tcx: ty::TyCtxt<'tcx>,
+        caller_id: &DefId,
+        constraints: HashMap<mir::BasicBlock, BlockPath>,
+    ) -> Vec<CallSite<'tcx>> {
+        use mir::visit::Visitor;
+
+        #[derive(Clone)]
+        struct SearchFunctionCall<'tcx, 'local> {
+            tcx: ty::TyCtxt<'tcx>,
+            caller_instance: &'local FunctionInstance<'tcx>,
+            caller_body: &'local mir::Body<'tcx>,
+            callees: Vec<CallSite<'tcx>>,
+            constraints: HashMap<mir::BasicBlock, BlockPath>,
+            current_bb: mir::BasicBlock,
+        }
+
+        impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
+            fn new(
+                tcx: ty::TyCtxt<'tcx>,
+                caller_instance: &'local FunctionInstance<'tcx>,
+                caller_body: &'local mir::Body<'tcx>,
+                constraints: HashMap<mir::BasicBlock, BlockPath>,
+            ) -> Self {
+                SearchFunctionCall {
+                    tcx,
+                    caller_instance,
+                    caller_body,
+                    callees: Vec::default(),
+                    constraints,
+                    current_bb: mir::BasicBlock::from_usize(0),
+                }
+            }
+        }
+
+        impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
+            fn visit_basic_block_data(
+                &mut self,
+                block: mir::BasicBlock,
+                data: &mir::BasicBlockData<'tcx>,
+            ) {
+                self.current_bb = block;
+                self.super_basic_block_data(block, data);
+            }
+
+            fn visit_terminator(
+                &mut self,
+                terminator: &Terminator<'tcx>,
+                _location: mir::Location,
+            ) {
+                if let TerminatorKind::Call { func, .. } = &terminator.kind {
+                    tracing::debug!(
+                        "Found Call => callee: {:?}, func.ty: {:?}",
+                        func,
+                        func.ty(self.caller_body, self.tcx)
+                    );
+
+                    use mir::Operand::*;
+                    let typing_env =
+                        TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
+
+                    let before_mono_ty = func.ty(self.caller_body, self.tcx);
+                    let monod_result = monomorphize(
+                        self.tcx,
+                        typing_env,
+                        self.caller_instance.instance().expect("instance is None"),
+                        before_mono_ty,
+                    );
+
+                    let callee = if let Err(err) = monod_result {
+                        tracing::warn!("Monomorphization failed: {:?}", err);
+                        match func {
+                            Constant(_) => match before_mono_ty.kind() {
+                                ty::TyKind::FnDef(def_id, _) => {
+                                    tracing::warn!(
+                                        "Callee {:?} is not monomorphized, using non-instance",
+                                        def_id
+                                    );
+                                    Some(FunctionInstance::new_non_instance(*def_id))
+                                }
+                                _ => None,
+                            },
+                            Move(_) | Copy(_) => {
+                                tracing::warn!("skip move or copy: {:?}", func);
+                                None
+                            }
+                        }
+                    } else {
+                        let monod_ty = monod_result.unwrap();
+
+                        match func {
+                            Constant(_) => match monod_ty.kind() {
+                                ty::TyKind::FnDef(def_id, monoed_args) => {
+                                    match self.tcx.def_kind(def_id) {
+                                        def::DefKind::Fn | def::DefKind::AssocFn => {
+                                            tracing::debug!("Try resolve instance: {:?}", monod_ty);
+                                            let instance_result = ty::Instance::try_resolve(
+                                                self.tcx,
+                                                typing_env,
+                                                *def_id,
+                                                monoed_args,
+                                            );
+
+                                            match instance_result {
+                                                Err(err) => {
+                                                    tracing::error!(
+                                                        "Instance [{:?}] resolution error: {:?}",
+                                                        monod_ty,
+                                                        err
+                                                    );
+                                                    None
+                                                }
+                                                Ok(opt_instance) => {
+                                                    if let Some(instance) = opt_instance {
+                                                        tracing::info!(
+                                                            "Resolved instance successfully: {:?}",
+                                                            instance
+                                                        );
+                                                        Some(FunctionInstance::new_instance(
+                                                            instance,
+                                                        ))
+                                                    } else {
+                                                        tracing::warn!(
+                                                            "Resolve [{:#?}] failed, try trivial resolve",
+                                                            monod_ty
+                                                        );
+                                                        trivial_resolve(self.tcx, *def_id).or_else(|| {
+                                                            tracing::warn!("Trivial resolve [{:?}] also failed, using non-instance", def_id);
+                                                            Some(FunctionInstance::new_non_instance(*def_id))
+                                                        })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        other => {
+                                            tracing::error!(
+                                                "internal error: unknown call type: {:?}",
+                                                other
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    tracing::error!(
+                                        "internal error: unexpected function type: {:?}",
+                                        monod_ty
+                                    );
+                                    None
+                                }
+                            },
+                            // Move or copy operands
+                            Move(_) | Copy(_) => {
+                                tracing::warn!("skip move or copy: {:?}", func);
+                                None
+                            }
+                        }
+                    };
+
+                    // If callee function is found, add to the call list
+                    if let Some(callee) = callee {
+                        self.callees.push(CallSite::new(
+                            *self.caller_instance,
+                            callee,
+                            self.constraints[&self.current_bb].constraints,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let caller_body = tcx.optimized_mir(caller_id);
+        let mut search_callees = SearchFunctionCall::new(tcx, self, caller_body, constraints);
+        search_callees.visit_body(caller_body);
+        search_callees.callees
+    }
+}
 
 pub(crate) fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<FunctionInstance<'_>> {
     let ty = tcx.type_of(def_id).skip_binder();
@@ -52,63 +249,6 @@ pub(crate) fn perform_mono_analysis<'tcx>(
         call_graph.deduplicate_call_sites();
     } else {
         tracing::info!("Deduplication disabled - keeping all call sites");
-    }
-
-    // If a function to find is specified, find its callers
-    if let Some(target_path) = &options.find_callers_of {
-        tracing::info!("Finding callers of function: {}", target_path);
-        if let Some(callers) = call_graph.find_callers(tcx, target_path) {
-            // Get output directory
-            let output_dir = options
-                .output_dir
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("./target"));
-
-            // Determine output format (text or JSON)
-            if options.json_output {
-                // Generate JSON output for callers
-                let callers_json = call_graph.format_callers_as_json(tcx, target_path, callers);
-
-                // Output to JSON file
-                let json_output_path = output_dir.join("callers.json");
-
-                if let Err(e) = std::fs::write(&json_output_path, callers_json) {
-                    tracing::error!("Failed to write callers to JSON file: {:?}", e);
-                } else {
-                    tracing::info!("Callers JSON output written to: {:?}", json_output_path);
-                }
-            } else {
-                // Generate text output for callers (original behavior)
-                let callers_output = call_graph.format_callers(tcx, target_path, callers);
-
-                // Output to text file
-                let output_path = output_dir.join("callers.txt");
-
-                if let Err(e) = std::fs::write(&output_path, callers_output) {
-                    tracing::error!("Failed to write callers to file: {:?}", e);
-                } else {
-                    tracing::info!("Callers output written to: {:?}", output_path);
-                }
-            }
-        }
-    }
-
-    // If JSON output is requested, write call graph as JSON
-    if options.json_output {
-        let json_output = call_graph.format_call_graph_as_json(tcx);
-
-        // Output to file
-        let output_path = options
-            .output_dir
-            .clone()
-            .unwrap_or_else(|| std::path::PathBuf::from("./target"))
-            .join("callgraph.json");
-
-        if let Err(e) = std::fs::write(&output_path, json_output) {
-            tracing::error!("Failed to write JSON call graph to file: {:?}", e);
-        } else {
-            tracing::info!("JSON call graph written to: {:?}", output_path);
-        }
     }
 
     call_graph

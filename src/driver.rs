@@ -4,41 +4,12 @@ use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
 use std::borrow::Cow;
 use std::env;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
 
 use crate::args::{AllCliArgs, CGArgs};
 use crate::callgraph;
 use rustc_compat::{CrateFilter, Plugin, RustcPluginArgs, Utf8Path};
-
-/// Write content to a specified file and log the result
-///
-/// # Parameters
-/// * `path` - Path to the output file
-/// * `write_fn` - Closure that handles the actual writing
-///
-/// # Returns
-/// * `io::Result<()>` - Ok(()) on success, Err on failure
-fn write_to_file<P, F>(path: P, write_fn: F) -> io::Result<()>
-where
-    P: AsRef<Path>,
-    F: FnOnce(&mut std::fs::File) -> io::Result<()>,
-{
-    // Ensure parent directory exists
-    if let Some(parent) = path.as_ref().parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Create and write to the file
-    let mut file = std::fs::File::create(&path)?;
-    write_fn(&mut file)?;
-
-    // Log success message
-    tracing::info!("Successfully wrote to file: {}", path.as_ref().display());
-    Ok(())
-}
 
 #[derive(Default)]
 pub struct CGDriver;
@@ -100,33 +71,7 @@ impl rustc_driver::Callbacks for CGCallbacks {
     ) -> Compilation {
         tracing::info!("{}", "Entering after_analysis callback");
 
-        let callgraph = callgraph::analyze_crate(tcx, &self.plugin_args);
-
-        // 获取当前 crate 名称
-        let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string();
-
-        // 创建输出文件路径
-        let output_dir = self
-            .plugin_args
-            .output_dir
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("target"));
-        let output_path = output_dir.join(format!("{}-callgraph.txt", crate_name));
-
-        // 获取格式化的调用图输出
-        let formatted_callgraph = callgraph.format_call_graph(tcx);
-
-        // 写入调用图到文件
-        match write_to_file(&output_path, |file| write!(file, "{}", formatted_callgraph)) {
-            Ok(_) => tracing::info!("Call graph written to {}", output_path.display()),
-            Err(e) => tracing::error!("Failed to write call graph: {}", e),
-        }
-
-        // 为了方便调试，也可以创建一个包含原始数据的文件
-        let debug_path = output_dir.join(format!("{}-callgraph-debug.txt", crate_name));
-        let _ = write_to_file(&debug_path, |file| {
-            writeln!(file, "call_graph: {:#?}", callgraph.call_sites)
-        });
+        callgraph::analyze_crate(tcx, &self.plugin_args);
 
         tracing::info!("{}", "Exiting after_analysis callback");
         Compilation::Continue

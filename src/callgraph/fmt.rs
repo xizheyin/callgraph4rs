@@ -3,6 +3,8 @@ use crate::callgraph::CallGraph;
 use rustc_middle::ty::TyCtxt;
 use serde_json::json;
 use std::collections::HashMap;
+use std::io::{self, Write};
+use std::path::Path;
 
 use super::function::FunctionInstance;
 use super::types::CallSite;
@@ -17,29 +19,19 @@ impl<'tcx> CallGraph<'tcx> {
         match instance {
             FunctionInstance::Instance(inst) => {
                 let def_id = inst.def_id();
-                // Get readable function name and hash
-                let path_hash = format!("{:?}", tcx.def_path_hash(def_id));
 
                 // Determine whether to include generic arguments based on the without_args option
-                let path_str = if !self.without_args && inst.args.len() > 0 {
+                if !self.without_args && !inst.args.is_empty() {
                     // Include generic parameter information
                     tcx.def_path_str_with_args(def_id, inst.args)
                 } else {
                     // Skip generic parameter information
                     tcx.def_path_str(def_id)
-                };
-
-                // Append the hash to the path string
-                format!("{} [{}]", path_str, path_hash)
+                }
             }
             FunctionInstance::NonInstance(def_id) => {
-                // For non-instances, only show the path and hash
-                let path_hash = format!("{}", tcx.def_path_hash(def_id).0);
-                format!(
-                    "{} (non-instance) [{}]",
-                    tcx.def_path_str(def_id),
-                    path_hash
-                )
+                // For non-instances, only show the path
+                tcx.def_path_str(def_id)
             }
         }
     }
@@ -93,41 +85,10 @@ impl<'tcx> CallGraph<'tcx> {
                     ));
                 }
 
-                result.push_str("\n");
+                result.push('\n');
             }
         }
 
-        result
-    }
-
-    /// Format caller information as readable text
-    pub(crate) fn format_callers(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        target_path: &str,
-        callers: Vec<FunctionInstance<'tcx>>,
-    ) -> String {
-        let mut result = String::new();
-
-        result.push_str(&format!(
-            "Callers of functions matching '{}':\n",
-            target_path
-        ));
-        result.push_str("==================================\n\n");
-
-        // Sort callers to get consistent output
-        let mut sorted_callers: Vec<FunctionInstance<'tcx>> = callers;
-        sorted_callers.sort_by_key(|caller| format!("{:?}", caller));
-
-        for caller in &sorted_callers {
-            let caller_name = self.function_instance_to_string(tcx, *caller);
-            result.push_str(&format!("- {}\n", caller_name));
-        }
-
-        result.push_str(&format!(
-            "\nTotal: {} callers found\n",
-            sorted_callers.len()
-        ));
         result
     }
 
@@ -219,6 +180,37 @@ impl<'tcx> CallGraph<'tcx> {
         serde_json::to_string_pretty(&json_entries).unwrap_or_else(|_| "[]".to_string())
     }
 
+    /// Format caller information as readable text
+    pub(crate) fn format_callers(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        target_path: &str,
+        callers: Vec<FunctionInstance<'tcx>>,
+    ) -> String {
+        let mut result = String::new();
+
+        result.push_str(&format!(
+            "Callers of functions matching '{}':\n",
+            target_path
+        ));
+        result.push_str("==================================\n\n");
+
+        // Sort callers to get consistent output
+        let mut sorted_callers: Vec<FunctionInstance<'tcx>> = callers;
+        sorted_callers.sort_by_key(|caller| format!("{:?}", caller));
+
+        for caller in &sorted_callers {
+            let caller_name = self.function_instance_to_string(tcx, *caller);
+            result.push_str(&format!("- {}\n", caller_name));
+        }
+
+        result.push_str(&format!(
+            "\nTotal: {} callers found\n",
+            sorted_callers.len()
+        ));
+        result
+    }
+
     /// Format caller information as JSON
     pub(crate) fn format_callers_as_json(
         &self,
@@ -260,4 +252,100 @@ impl<'tcx> CallGraph<'tcx> {
         // Format as pretty-printed JSON
         serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string())
     }
+}
+
+pub(crate) fn output_call_graph_result<'tcx>(
+    call_graph: &CallGraph<'tcx>,
+    tcx: TyCtxt<'tcx>,
+    options: &crate::args::CGArgs,
+) {
+    let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string();
+
+    let output_dir = options
+        .output_dir
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("./target"));
+    let output_path = output_dir.join(format!("{}-callgraph.txt", crate_name));
+
+    let formatted_callgraph = call_graph.format_call_graph(tcx);
+
+    match write_to_file(&output_path, |file| write!(file, "{}", formatted_callgraph)) {
+        Ok(_) => tracing::info!("Call graph written to {}", output_path.display()),
+        Err(e) => tracing::error!("Failed to write call graph: {}", e),
+    }
+
+    let debug_path = output_dir.join(format!("{}-callgraph-debug.txt", crate_name));
+    let _ = write_to_file(&debug_path, |file| {
+        writeln!(file, "call_graph: {:#?}", call_graph.call_sites)
+    });
+}
+
+// Helper function to output callers result (reduces code duplication)
+pub(crate) fn output_callers_result<'tcx>(
+    call_graph: &CallGraph<'tcx>,
+    tcx: TyCtxt<'tcx>,
+    target: &str,
+    callers: Vec<FunctionInstance<'tcx>>,
+    options: &crate::args::CGArgs,
+    file_prefix: &str,
+) {
+    // Get output directory
+    let output_dir = options
+        .output_dir
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("./target"));
+
+    // Determine output format (text or JSON)
+    if options.json_output {
+        // Generate JSON output for callers
+        let callers_json = call_graph.format_callers_as_json(tcx, target, callers);
+
+        // Output to JSON file
+        let json_output_path = output_dir.join(format!("{}.json", file_prefix));
+
+        if let Err(e) = std::fs::write(&json_output_path, callers_json) {
+            tracing::error!("Failed to write callers to JSON file: {:?}", e);
+        } else {
+            tracing::info!("Callers JSON output written to: {:?}", json_output_path);
+        }
+    } else {
+        // Generate text output for callers
+        let callers_output = call_graph.format_callers(tcx, target, callers);
+
+        // Output to text file
+        let output_path = output_dir.join(format!("{}.txt", file_prefix));
+
+        if let Err(e) = std::fs::write(&output_path, callers_output) {
+            tracing::error!("Failed to write callers to file: {:?}", e);
+        } else {
+            tracing::info!("Callers output written to: {:?}", output_path);
+        }
+    }
+}
+
+/// Write content to a specified file and log the result
+///
+/// # Parameters
+/// * `path` - Path to the output file
+/// * `write_fn` - Closure that handles the actual writing
+///
+/// # Returns
+/// * `io::Result<()>` - Ok(()) on success, Err on failure
+fn write_to_file<P, F>(path: P, write_fn: F) -> io::Result<()>
+where
+    P: AsRef<Path>,
+    F: FnOnce(&mut std::fs::File) -> io::Result<()>,
+{
+    // Ensure parent directory exists
+    if let Some(parent) = path.as_ref().parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Create and write to the file
+    let mut file = std::fs::File::create(&path)?;
+    write_fn(&mut file)?;
+
+    // Log success message
+    tracing::info!("Successfully wrote to file: {}", path.as_ref().display());
+    Ok(())
 }

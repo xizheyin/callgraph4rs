@@ -196,7 +196,36 @@ RUST_LOG=off call-cg --find-callers-of "DataStore::<Electronics>::total_value"
 
 # Find all callers of HashMap::new method from standard library, using full generic path
 RUST_LOG=off call-cg --find-callers-of "std::collections::HashMap::<K, V>::new"
+
+# Find callers using the exact DefPathHash (more precise than path matching)
+call-cg --find-callers-by-hash "8f219f8a15822e31"
 ```
+
+### Finding Functions by DefPathHash
+
+For precise function lookup, you can use the `--find-callers-by-hash` option with the DefPathHash value:
+
+```bash
+call-cg --find-callers-by-hash "8f219f8a15822e31"
+```
+
+This approach provides a more reliable way to find functions than using paths, especially when:
+- The same function name appears in multiple modules
+- Working with complex generic instantiations
+- Dealing with mangled function names
+
+You can find the DefPathHash in the standard output of any call graph report - each function path
+is displayed with its hash in square brackets, e.g., `DataStore::total_value [8f219f8a15822e31]`.
+
+This can also be combined with the `--json-output` option to get a JSON representation:
+
+```bash
+call-cg --find-callers-by-hash "8f219f8a15822e31" --json-output
+```
+
+The results will be available in `./target/callers_by_hash.txt` or `./target/callers_by_hash.json`.
+
+> **Note**: The `--find-callers-of` and `--find-callers-by-hash` options are mutually exclusive. If both are specified, `--find-callers-of` will be used and `--find-callers-by-hash` will be ignored.
 
 ## Testing
 

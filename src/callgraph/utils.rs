@@ -22,9 +22,8 @@ pub(crate) fn get_crate_version<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Strin
     if crate_num == rustc_hir::def_id::LOCAL_CRATE {
         // This is the current crate being analyzed
         // Try to get version from environment if available
-        match option_env!("CARGO_PKG_VERSION") {
-            Some(version) => return version.to_string(),
-            None => {}
+        if let Some(version) = option_env!("CARGO_PKG_VERSION") {
+            return version.to_string();
         }
     }
 
@@ -36,7 +35,7 @@ pub(crate) fn get_crate_version<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Strin
         if potential_version
             .chars()
             .next()
-            .map_or(false, |c| c.is_digit(10))
+            .is_some_and(|c| c.is_ascii_digit())
         {
             return potential_version.to_string();
         }
@@ -92,92 +91,33 @@ impl<'tcx> CallGraph<'tcx> {
         self.call_sites = deduplicated_call_sites.into_iter().collect();
     }
 
-    /// Find all functions that directly or indirectly call the specified function
-    pub fn find_callers(
+    /// Find functions that match a predicate and then find all their callers
+    fn find_callers_by_predicate<F>(
         &self,
         tcx: TyCtxt<'tcx>,
-        target_path: &str,
-    ) -> Option<Vec<FunctionInstance<'tcx>>> {
-        // First find functions that match the specified path
+        target_description: &str,
+        predicate: F,
+    ) -> Option<Vec<FunctionInstance<'tcx>>>
+    where
+        F: Fn(FunctionInstance<'tcx>, TyCtxt<'tcx>) -> bool,
+    {
+        // First find functions that match the predicate
         let target_functions: Vec<FunctionInstance<'tcx>> = self
             .call_sites
             .iter()
             .map(|call_site| call_site.callee())
-            .filter(|func| {
-                // Get complete function path (including generic parameters)
-                let full_func_path = self.function_instance_to_string(tcx, *func);
-
-                // Also get the basic path without generic parameters
-                let base_path = match func {
-                    FunctionInstance::Instance(inst) => tcx.def_path_str(inst.def_id()),
-                    FunctionInstance::NonInstance(def_id) => tcx.def_path_str(*def_id),
-                };
-
-                // If the target path contains '<', assume the user specified a complete path with generic parameters
-                if target_path.contains("<") {
-                    // If there are angle brackets, match complete path or basic path
-                    tracing::trace!("base_path: {}", base_path);
-                    tracing::trace!("full_func_path: {}", full_func_path);
-                    base_path.contains(target_path) || full_func_path.contains(target_path)
-                } else {
-                    // If there are no angle brackets, remove all generic parameter parts from function paths
-                    // Remove all ::<...> parts from base_path and full_func_path
-
-                    // Process generic parameters in path
-                    let process_path = |path: &str| -> String {
-                        let mut result = String::new();
-                        let mut in_generic = false;
-                        let mut angle_bracket_count = 0;
-                        let mut skip_from_index = 0;
-
-                        // Traverse the string, identify and remove generic parameter parts
-                        for (i, c) in path.char_indices() {
-                            if c == '<' {
-                                if !in_generic && i >= 2 && &path[i - 2..i] == "::" {
-                                    // Find the starting position of generic parameters
-                                    in_generic = true;
-                                    angle_bracket_count = 1;
-                                    skip_from_index = i - 2; // Including ::
-                                    result.truncate(skip_from_index);
-                                } else if in_generic {
-                                    angle_bracket_count += 1;
-                                }
-                            } else if c == '>' && in_generic {
-                                angle_bracket_count -= 1;
-                                if angle_bracket_count == 0 {
-                                    // End of generic parameters
-                                    in_generic = false;
-                                }
-                            } else if !in_generic && skip_from_index <= i {
-                                // Not within generic parameters, add to result
-                                result.push(c);
-                            }
-                        }
-
-                        result
-                    };
-
-                    // Clean both paths
-                    let clean_base_path = process_path(&base_path);
-                    let clean_full_path = process_path(&full_func_path);
-
-                    tracing::trace!("clean_base_path: {}", clean_base_path);
-                    tracing::trace!("clean_full_path: {}", clean_full_path);
-                    // Use cleaned paths for matching
-                    clean_base_path.contains(target_path) || clean_full_path.contains(target_path)
-                }
-            })
+            .filter(|&func| predicate(func, tcx))
             .collect();
 
         if target_functions.is_empty() {
-            tracing::warn!("No function found matching path: {}", target_path);
+            tracing::warn!("No function found matching {}", target_description);
             return None;
         }
 
         tracing::info!(
-            "Found {} functions matching path: {}",
+            "Found {} functions matching {}",
             target_functions.len(),
-            target_path
+            target_description
         );
         for func in &target_functions {
             tracing::info!(
@@ -220,10 +160,96 @@ impl<'tcx> CallGraph<'tcx> {
         }
 
         if all_callers.is_empty() {
-            tracing::warn!("No callers found for the specified function");
+            tracing::warn!("No callers found for {}", target_description);
             return None;
         }
 
         Some(all_callers.into_iter().collect())
+    }
+
+    /// Find all functions that directly or indirectly call the specified function
+    pub fn find_callers_by_path(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        target_path: &str,
+    ) -> Option<Vec<FunctionInstance<'tcx>>> {
+        self.find_callers_by_predicate(tcx, &format!("path: {}", target_path), |func, tcx| {
+            // Get complete function path (including generic parameters)
+            let full_func_path = self.function_instance_to_string(tcx, func);
+
+            // Also get the basic path without generic parameters
+            let base_path = match func {
+                FunctionInstance::Instance(inst) => tcx.def_path_str(inst.def_id()),
+                FunctionInstance::NonInstance(def_id) => tcx.def_path_str(def_id),
+            };
+
+            // If the target path contains '<', assume the user specified a complete path with generic parameters
+            if target_path.contains("<") {
+                // If there are angle brackets, match complete path or basic path
+                tracing::trace!("base_path: {}", base_path);
+                tracing::trace!("full_func_path: {}", full_func_path);
+                base_path.contains(target_path) || full_func_path.contains(target_path)
+            } else {
+                // If there are no angle brackets, remove all generic parameter parts from function paths
+                // Remove all ::<...> parts from base_path and full_func_path
+
+                // Process generic parameters in path
+                let process_path = |path: &str| -> String {
+                    let mut result = String::new();
+                    let mut in_generic = false;
+                    let mut angle_bracket_count = 0;
+                    let mut skip_from_index = 0;
+
+                    // Traverse the string, identify and remove generic parameter parts
+                    for (i, c) in path.char_indices() {
+                        if c == '<' {
+                            if !in_generic && i >= 2 && &path[i - 2..i] == "::" {
+                                // Find the starting position of generic parameters
+                                in_generic = true;
+                                angle_bracket_count = 1;
+                                skip_from_index = i - 2; // Including ::
+                                result.truncate(skip_from_index);
+                            } else if in_generic {
+                                angle_bracket_count += 1;
+                            }
+                        } else if c == '>' && in_generic {
+                            angle_bracket_count -= 1;
+                            if angle_bracket_count == 0 {
+                                // End of generic parameters
+                                in_generic = false;
+                            }
+                        } else if !in_generic && skip_from_index <= i {
+                            // Not within generic parameters, add to result
+                            result.push(c);
+                        }
+                    }
+
+                    result
+                };
+
+                // Clean both paths
+                let clean_base_path = process_path(&base_path);
+                let clean_full_path = process_path(&full_func_path);
+
+                tracing::trace!("clean_base_path: {}", clean_base_path);
+                tracing::trace!("clean_full_path: {}", clean_full_path);
+                // Use cleaned paths for matching
+                clean_base_path.contains(target_path) || clean_full_path.contains(target_path)
+            }
+        })
+    }
+
+    /// Find all functions that directly or indirectly call the function with specified hash
+    pub fn find_callers_by_hash(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        target_hash: &str,
+    ) -> Option<Vec<FunctionInstance<'tcx>>> {
+        let target_hash_owned = target_hash.to_string(); // Create owned copy for closure
+        self.find_callers_by_predicate(tcx, &format!("hash: {}", target_hash), move |func, tcx| {
+            let def_id = func.def_id();
+            let func_hash = format!("{}", tcx.def_path_hash(def_id).0);
+            func_hash == target_hash_owned
+        })
     }
 }

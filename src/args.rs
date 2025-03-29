@@ -36,7 +36,12 @@ pub struct CGArgs {
     /// Find all callers of the specified function path
     /// When specified, will output all functions that directly or indirectly call this function
     #[arg(long)]
-    pub find_callers_of: Option<String>,
+    pub find_callers: Option<String>,
+
+    /// Find all callers of function with the specified def_path_hash
+    /// When specified, will output all functions that directly or indirectly call the function with this hash
+    #[arg(long)]
+    pub find_callers_by_hash: Option<String>,
 
     /// Output the call graph as JSON format
     /// This provides machine-readable data for further processing
