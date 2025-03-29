@@ -185,7 +185,7 @@ impl<'tcx> CallGraph<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         target_path: &str,
-        callers: Vec<FunctionInstance<'tcx>>,
+        callers: Vec<(FunctionInstance<'tcx>, usize)>,
     ) -> String {
         let mut result = String::new();
 
@@ -195,13 +195,22 @@ impl<'tcx> CallGraph<'tcx> {
         ));
         result.push_str("==================================\n\n");
 
-        // Sort callers to get consistent output
-        let mut sorted_callers: Vec<FunctionInstance<'tcx>> = callers;
-        sorted_callers.sort_by_key(|caller| format!("{:?}", caller));
+        // Sort callers to get consistent output - first by constraint count, then by name
+        let mut sorted_callers = callers;
+        sorted_callers.sort_by(|(a, a_constraints), (b, b_constraints)| {
+            a_constraints.cmp(b_constraints).then_with(|| {
+                let a_name = format!("{:?}", a);
+                let b_name = format!("{:?}", b);
+                a_name.cmp(&b_name)
+            })
+        });
 
-        for caller in &sorted_callers {
+        for (caller, constraints) in &sorted_callers {
             let caller_name = self.function_instance_to_string(tcx, *caller);
-            result.push_str(&format!("- {}\n", caller_name));
+            result.push_str(&format!(
+                "- {} [path constraints: {}]\n",
+                caller_name, constraints
+            ));
         }
 
         result.push_str(&format!(
@@ -216,16 +225,22 @@ impl<'tcx> CallGraph<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         target_path: &str,
-        callers: Vec<FunctionInstance<'tcx>>,
+        callers: Vec<(FunctionInstance<'tcx>, usize)>,
     ) -> String {
-        // Sort callers to get consistent output
-        let mut sorted_callers: Vec<FunctionInstance<'tcx>> = callers;
-        sorted_callers.sort_by_key(|caller| format!("{:?}", caller));
+        // Sort callers to get consistent output - first by constraint count, then by name
+        let mut sorted_callers = callers;
+        sorted_callers.sort_by(|(a, a_constraints), (b, b_constraints)| {
+            a_constraints.cmp(b_constraints).then_with(|| {
+                let a_name = format!("{:?}", a);
+                let b_name = format!("{:?}", b);
+                a_name.cmp(&b_name)
+            })
+        });
 
         // Create array for caller information
         let mut caller_entries = Vec::new();
 
-        for caller in &sorted_callers {
+        for (caller, constraints) in &sorted_callers {
             let caller_name = self.function_instance_to_string(tcx, *caller);
             let caller_def_id = caller.def_id();
             let caller_path = tcx.def_path_str(caller_def_id);
@@ -238,7 +253,8 @@ impl<'tcx> CallGraph<'tcx> {
                 "name": caller_name,
                 "version": version,
                 "path": caller_path,
-                "path_hash": format!("{}", tcx.def_path_hash(caller_def_id).0)
+                "path_hash": format!("{}", tcx.def_path_hash(caller_def_id).0),
+                "path_constraints": constraints
             }));
         }
 
@@ -305,7 +321,7 @@ pub(crate) fn output_callers_result<'tcx>(
     call_graph: &CallGraph<'tcx>,
     tcx: TyCtxt<'tcx>,
     target: &str,
-    callers: Vec<FunctionInstance<'tcx>>,
+    callers: Vec<(FunctionInstance<'tcx>, usize)>,
     options: &crate::args::CGArgs,
     file_prefix: &str,
 ) {

@@ -96,7 +96,7 @@ impl<'tcx> CallGraph<'tcx> {
         tcx: TyCtxt<'tcx>,
         target_description: &str,
         predicate: F,
-    ) -> Option<Vec<FunctionInstance<'tcx>>>
+    ) -> Option<Vec<(FunctionInstance<'tcx>, usize)>>
     where
         F: Fn(FunctionInstance<'tcx>, TyCtxt<'tcx>) -> bool,
     {
@@ -125,34 +125,55 @@ impl<'tcx> CallGraph<'tcx> {
             );
         }
 
-        // Create mapping from callee to callers
+        // Create mapping from callee to callers with constraint counts
         let mut callee_to_callers: HashMap<
             FunctionInstance<'tcx>,
-            HashSet<FunctionInstance<'tcx>>,
+            HashMap<FunctionInstance<'tcx>, usize>,
         > = HashMap::new();
+
         for call_site in &self.call_sites {
+            let caller = call_site.caller();
+            let callee = call_site.callee();
+            let constraints = call_site.constraint_count();
+
             callee_to_callers
-                .entry(call_site.callee())
+                .entry(callee)
                 .or_default()
-                .insert(call_site.caller());
+                .entry(caller)
+                .and_modify(|c| *c += constraints)
+                .or_insert(constraints);
         }
 
-        // Find all direct and indirect callers
-        let mut all_callers: HashSet<FunctionInstance<'tcx>> = HashSet::new();
-        let mut queue: VecDeque<FunctionInstance<'tcx>> = target_functions.into_iter().collect();
+        // Find all direct and indirect callers with constraint counts
+        let mut all_callers: HashMap<FunctionInstance<'tcx>, usize> = HashMap::new();
+        let mut queue: VecDeque<(FunctionInstance<'tcx>, usize)> =
+            target_functions.into_iter().map(|f| (f, 0)).collect();
         let mut processed: HashSet<FunctionInstance<'tcx>> = HashSet::new();
 
-        while let Some(current) = queue.pop_front() {
+        while let Some((current, path_constraints)) = queue.pop_front() {
             if processed.contains(&current) {
                 continue;
             }
             processed.insert(current);
 
             if let Some(callers) = callee_to_callers.get(&current) {
-                for caller in callers {
+                for (caller, constraints) in callers {
+                    // 累计约束数：当前路径约束 + 当前调用约束
+                    let total_constraints = path_constraints + constraints;
+
                     if !processed.contains(caller) {
-                        all_callers.insert(*caller);
-                        queue.push_back(*caller);
+                        // 插入或更新调用者的约束累计值
+                        all_callers
+                            .entry(*caller)
+                            .and_modify(|c| {
+                                // 如果已存在，取较小值（最短路径）
+                                if total_constraints < *c {
+                                    *c = total_constraints;
+                                }
+                            })
+                            .or_insert(total_constraints);
+
+                        queue.push_back((*caller, total_constraints));
                     }
                 }
             }
@@ -163,6 +184,7 @@ impl<'tcx> CallGraph<'tcx> {
             return None;
         }
 
+        // 返回调用者列表及其约束数量
         Some(all_callers.into_iter().collect())
     }
 
@@ -171,7 +193,7 @@ impl<'tcx> CallGraph<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         target_path: &str,
-    ) -> Option<Vec<FunctionInstance<'tcx>>> {
+    ) -> Option<Vec<(FunctionInstance<'tcx>, usize)>> {
         self.find_callers_by_predicate(tcx, &format!("path: {}", target_path), |func, tcx| {
             // Get complete function path (including generic parameters)
             let full_func_path = self.function_instance_to_string(tcx, func);
@@ -243,7 +265,7 @@ impl<'tcx> CallGraph<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         target_hash: &str,
-    ) -> Option<Vec<FunctionInstance<'tcx>>> {
+    ) -> Option<Vec<(FunctionInstance<'tcx>, usize)>> {
         let target_hash_owned = target_hash.to_string(); // Create owned copy for closure
         self.find_callers_by_predicate(tcx, &format!("hash: {}", target_hash), move |func, tcx| {
             let def_id = func.def_id();

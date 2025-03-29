@@ -38,14 +38,16 @@ pub fn analyze_crate<'tcx>(
             // Only find_callers_of is specified
             tracing::info!("Finding callers of function: {}", target_path);
             Timer::start("find_callers_by_path");
-            if let Some(callers) = call_graph.find_callers_by_path(tcx, target_path) {
+            if let Some(callers_with_constraints) =
+                call_graph.find_callers_by_path(tcx, target_path)
+            {
                 Timer::stop("find_callers_by_path");
                 crate::timer::measure("output_callers_result", || {
                     output_callers_result(
                         &call_graph,
                         tcx,
                         target_path,
-                        callers,
+                        callers_with_constraints,
                         options,
                         "callers",
                     )
@@ -58,7 +60,9 @@ pub fn analyze_crate<'tcx>(
             // Only find_callers_by_hash is specified
             tracing::info!("Finding callers of function with hash: {}", target_hash);
             Timer::start("find_callers_by_hash");
-            if let Some(callers) = call_graph.find_callers_by_hash(tcx, target_hash) {
+            if let Some(callers_with_constraints) =
+                call_graph.find_callers_by_hash(tcx, target_hash)
+            {
                 Timer::stop("find_callers_by_hash");
                 let target_display = format!("function with hash: {}", target_hash);
                 crate::timer::measure("output_callers_result", || {
@@ -66,7 +70,7 @@ pub fn analyze_crate<'tcx>(
                         &call_graph,
                         tcx,
                         &target_display,
-                        callers,
+                        callers_with_constraints,
                         options,
                         "callers_by_hash",
                     )

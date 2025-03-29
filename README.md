@@ -82,6 +82,10 @@ Options:
           Output file for timing information When specified, will write detailed timing information to this file
       --cg-debug
           Enable debug mode When enabled, will print debug information
+      --count-calls
+          Generate call count statistics file (count-callgraph.txt)
+      --count-debug
+          Generate detailed call count debug file (count-callgraph-debug.txt)
   -h, --help
           Print help
 ```
@@ -160,7 +164,7 @@ To find all functions that directly or indirectly call a specific function:
 call-cg --find-callers-of "std::collections::HashMap::insert"
 ```
 
-This will generate a report of all callers in `./target/callers.txt`.
+This will generate a report of all callers in `./target/callers.txt`. The report includes each caller function along with its path constraints count, which represents the accumulated number of control flow constraints along the shortest calling path.
 
 You can also generate a JSON format report by combining with the `--json-output` option:
 
@@ -180,17 +184,21 @@ Example JSON structure for callers:
       "name": "my_module::my_function",
       "version": "1.0.0",
       "path": "my_crate::my_module::my_function",
-      "path_hash": "7f21c985b3ab412c"
+      "path_hash": "7f21c985b3ab412c",
+      "path_constraints": 5
     },
     {
       "name": "another_function",
       "version": "0.5.2",
       "path": "other_crate::another_function",
-      "path_hash": "d23f91e6a0189f50"
+      "path_hash": "d23f91e6a0189f50",
+      "path_constraints": 8
     }
   ]
 }
 ```
+
+The `path_constraints` field indicates the accumulated number of control flow constraints along the call path. Lower values generally indicate more direct or simpler calling paths.
 
 You can use a partial path - the tool will match any function containing that substring. The matching behavior works as follows:
 
@@ -279,6 +287,33 @@ instance_callsites               | 1532       | 3285.43        | 2.14
 deduplicate_call_sites           | 1          | 120.43         | 120.43         
 ------------------------------------------------------------
 ```
+
+### Call Count Statistics
+
+You can generate call count statistics to analyze function call frequencies and relationships:
+
+```bash
+# Generate basic call count statistics (./target/count-callgraph.txt)
+call-cg --count-calls
+
+# Generate detailed caller-callee relationships (./target/count-callgraph-debug.txt)
+call-cg --count-debug
+
+# Generate both statistics files
+call-cg --count-calls --count-debug
+```
+
+The basic statistics file (`count-callgraph.txt`) includes:
+- Most frequently called functions
+- Top callers (functions that call the most other functions)
+- Most widely used functions (called by the most other functions)
+
+The detailed debug file (`count-callgraph-debug.txt`) provides:
+- Complete caller-to-callee relationships for each function
+- Complete callee-to-caller relationships for each function
+- Call counts for each relationship
+
+This information is valuable for understanding your codebase's structure, identifying hot paths, and detecting potential refactoring opportunities.
 
 ## Testing
 
