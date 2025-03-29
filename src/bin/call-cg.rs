@@ -26,10 +26,11 @@ fn main() -> std::io::Result<()> {
     fs::copy(&cargo_toolchain_path, &target_path)?;
 
     // 获取命令行参数并传递给 `cargo cg`
-    let args: Vec<String> = env::args().skip(1).collect();
+    let mut args: Vec<String> = env::args().skip(1).collect();
 
     if args.iter().any(|arg| arg == "--no-clean") {
         tracing::debug!("Skip to clean.");
+        args.remove(args.iter().position(|arg| arg == "--no-clean").unwrap());
     } else {
         tracing::trace!("Start to cargo clean.");
         // 执行 `cargo clean`
