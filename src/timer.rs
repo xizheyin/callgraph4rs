@@ -11,6 +11,8 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use itertools::Itertools;
+
 // Global timer instance
 lazy_static::lazy_static! {
     static ref TIMER: Timer = Timer::new();
@@ -178,7 +180,6 @@ impl Timer {
         match output_file.as_ref() {
             Some(file_path) => {
                 let file = OpenOptions::new()
-                    .write(true)
                     .create(true)
                     .append(true)
                     .open(file_path)?;
@@ -221,7 +222,8 @@ fn write_timers_to_file(
     )?;
     writeln!(file, "{:-<60}", "")?;
 
-    for (name, timer) in timers.iter() {
+    let sorted_timers = timers.iter().sorted_by_key(|(name, _)| *name);
+    for (name, timer) in sorted_timers {
         let total_ms = timer.elapsed.as_secs_f64() * 1000.0;
         let avg_ms = if timer.count > 0 {
             total_ms / timer.count as f64
