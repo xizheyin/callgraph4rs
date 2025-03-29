@@ -9,10 +9,8 @@ use super::CallGraph;
 
 // Get version information for a specific DefId from TyCtxt
 pub(crate) fn get_crate_version<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> String {
-    // Get the crate number for this DefId
-    let crate_num = def_id.krate;
-
     // Try to get the crate name
+    let crate_num = def_id.krate;
     let crate_name = tcx.crate_name(crate_num);
 
     // Check if we can get version from crate disambiguator (hash)
@@ -28,6 +26,7 @@ pub(crate) fn get_crate_version<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Strin
     }
 
     // Look for version patterns in the crate name (some crates include version in name)
+    // Crates in crates.io have a version in name
     // Format: name-x.y.z
     let crate_name_str = crate_name.to_string();
     if let Some(idx) = crate_name_str.rfind('-') {
