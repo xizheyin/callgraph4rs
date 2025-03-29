@@ -28,6 +28,7 @@ call-cg
 ```
 
 This will generate a call graph and save it to `./target/callgraph.txt`.
+Default `cargo clean`, you can pass `--no-clean` to off the step.
 
 ### Deduplication
 
