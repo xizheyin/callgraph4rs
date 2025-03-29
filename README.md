@@ -52,7 +52,7 @@ Output:
 ```
 This is a bug detector for Rust.
 
-Usage: cg [OPTIONS] [CARGO_ARGS]...
+Usage: cg4rs [OPTIONS] [CARGO_ARGS]...
 
 Arguments:
   [CARGO_ARGS]...  Arguments passed to cargo rust-analyzer
