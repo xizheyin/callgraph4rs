@@ -255,9 +255,10 @@ fn write_timers_to_file(
 ///
 /// # Example
 /// ```
+/// #![feature(rustc_private)]
 /// use cg4rs::timer::Timer;
 ///
-/// let result = Timer::measure("my_operation", || {
+/// let result = cg4rs::timer::measure("my_operation", || {
 ///     // code to measure
 ///     42
 /// });
