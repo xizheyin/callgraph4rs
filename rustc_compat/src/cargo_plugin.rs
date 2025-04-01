@@ -45,7 +45,7 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
     // 获取当前可执行文件的路径
-    // 即 dir_path/cg
+    // 即 dir_path/cg4rs
     let mut path = env::current_exe()
         .expect("current executable path invalid")
         .with_file_name(plugin.driver_name().as_ref());

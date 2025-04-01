@@ -49,10 +49,10 @@ fn main() -> std::io::Result<()> {
     let mut binding = Command::new("cargo");
     let cmd = binding.arg("cg4rs").args(&args);
     tracing::debug!("Start to exec: {:?}", cmd);
-    let status = cmd.status().expect("Failed to execute cargo cg");
+    let status = cmd.status().expect("Failed to execute cargo cg4rs");
 
     if !status.success() {
-        eprintln!("cargo cg failed");
+        eprintln!("cargo cg4rs failed");
     }
     tracing::debug!("Finish to exec: {:?}", cmd);
     Ok(())

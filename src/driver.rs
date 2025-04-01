@@ -25,7 +25,7 @@ impl Plugin for CGDriver {
     }
 
     fn driver_name(&self) -> Cow<'static, str> {
-        "cg".into()
+        "cg4rs".into()
     }
 
     // In the CLI, we ask Clap to parse arguments and also specify a CrateFilter.
