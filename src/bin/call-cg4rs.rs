@@ -54,6 +54,7 @@ fn main() -> std::io::Result<()> {
         }
         i += 1;
     }
+    println!("manifest_path: {:?}", manifest_path);
 
     // 确定根目录，优先级：1. root_path 2. manifest_path所在目录 3. 当前目录
     let root_dir = if let Some(path) = root_path {
@@ -104,10 +105,8 @@ fn main() -> std::io::Result<()> {
         let mut clean_args = vec!["clean".to_string()];
 
         // 添加manifest-path参数
-        for arg in &args_without_no_clean {
-            if arg.starts_with("--manifest-path") {
-                clean_args.push(arg.clone());
-            }
+        if let Some(path) = &manifest_path {
+            clean_args.push(format!("--manifest-path={}", path.display()));
         }
 
         println!("Executing: cargo {}", clean_args.join(" "));
