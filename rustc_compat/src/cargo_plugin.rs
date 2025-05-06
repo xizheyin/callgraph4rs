@@ -22,13 +22,9 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
         return;
     }
 
+    // 构建metadata命令并获取metadata
     tracing::trace!("Fetch metadata");
-    // 获取项目的元数据，不包括依赖项
-    let metadata = cargo_metadata::MetadataCommand::new()
-        .no_deps()
-        .other_options(["--all-features".to_string(), "--offline".to_string()])
-        .exec()
-        .unwrap();
+    let metadata = build_metadata_command().exec().unwrap();
 
     // 设置插件的目标目录
     let plugin_subdir = format!(
@@ -63,6 +59,11 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
         .arg("--target-dir")
         .arg(&target_dir);
 
+    // 添加manifest-path参数（如果有）
+    if let Some(manifest_path) = find_manifest_path() {
+        cmd.arg("--manifest-path").arg(manifest_path);
+    }
+
     // 根据环境变量设置 cargo 的输出详细程度
     if env::var(CARGO_VERBOSE).is_ok() {
         cmd.arg("-vv");
@@ -74,14 +75,7 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
     let workspace_members = metadata
         .workspace_members
         .iter()
-        .map(|pkg_id| {
-            metadata.index(pkg_id)
-            // metadata
-            //     .packages
-            //     .iter()
-            //     .find(|pkg| &pkg.id == pkg_id)
-            //     .unwrap()
-        })
+        .map(|pkg_id| metadata.index(pkg_id))
         .collect::<Vec<_>>();
 
     // 根据过滤器类型决定如何运行插件
@@ -119,6 +113,41 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
     let exit_status = cmd.status().expect("failed to wait for cargo?");
     tracing::info!("Finish to Exec {:?}", cmd);
     exit(exit_status.code().unwrap_or(-1));
+}
+
+/// 构建元数据命令
+fn build_metadata_command() -> cargo_metadata::MetadataCommand {
+    let mut binding = cargo_metadata::MetadataCommand::new();
+    let mut cmd = binding
+        .no_deps()
+        .other_options(["--all-features".to_string(), "--offline".to_string()]);
+
+    if let Some(manifest_path) = find_manifest_path() {
+        tracing::info!("Using manifest path: {}", manifest_path);
+        cmd = cmd.manifest_path(manifest_path);
+    }
+
+    cmd.clone()
+}
+
+/// 从命令行参数查找manifest-path
+fn find_manifest_path() -> Option<String> {
+    let args: Vec<String> = env::args().skip(1).collect();
+
+    for i in 0..args.len() {
+        if args[i].starts_with("--manifest-path=") {
+            // 形式: --manifest-path=/path/to/Cargo.toml
+            let parts: Vec<&str> = args[i].splitn(2, '=').collect();
+            if parts.len() == 2 {
+                return Some(parts[1].to_string());
+            }
+        } else if args[i] == "--manifest-path" && i + 1 < args.len() {
+            // 形式: --manifest-path /path/to/Cargo.toml
+            return Some(args[i + 1].clone());
+        }
+    }
+
+    None
 }
 
 /// 仅对特定文件所在的 crate 运行插件

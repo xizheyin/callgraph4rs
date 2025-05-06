@@ -86,6 +86,10 @@ Options:
           Generate call count statistics file (count-callgraph.txt)
       --count-debug
           Generate detailed call count debug file (count-callgraph-debug.txt)
+      --manifest-path <MANIFEST_PATH>
+          Path to the Cargo.toml file to use When specified, will use this manifest file instead of auto-detecting it
+      --root-path <ROOT_PATH>
+          Root path of the repository to analyze When specified, will use this as the base directory and automatically set manifest-path to <ROOT_PATH>/Cargo.toml
   -h, --help
           Print help
 ```
@@ -106,6 +110,26 @@ call-cg4rs
 call-cg4rs -o ./custom_output
 # Call graph will be available at ./custom_output/callgraph.txt
 ```
+
+### Analyzing a Project in a Different Directory
+
+You can analyze a Rust project located in a different directory without changing your current working directory:
+
+```bash
+# Using root-path (recommended)
+call-cg4rs --root-path /path/to/project
+# This will automatically find /path/to/project/Cargo.toml
+
+# Using manifest-path directly
+call-cg4rs --manifest-path /path/to/project/Cargo.toml
+```
+
+When using `--root-path`:
+- The rust-toolchain.toml file is automatically copied to the specified directory
+- All outputs (call graph, timing files, etc.) will be placed in the project's target directory
+- The manifest path is automatically set to `<ROOT_PATH>/Cargo.toml`
+
+This is especially useful for CI/CD pipelines or when analyzing multiple projects without changing directories.
 
 ### Outputting Call Graph in JSON Format
 
@@ -345,7 +369,6 @@ If you use this tool in academic research or other publications, please cite it 
   description = {A tool for generating and analyzing call graphs for Rust projects}
 }
 ```
-
 
 ## License
 

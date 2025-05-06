@@ -62,6 +62,16 @@ pub struct CGArgs {
     /// When enabled, will print debug information
     #[arg(long, default_value_t = false)]
     pub cg_debug: bool,
+
+    /// Path to the manifest (Cargo.toml)
+    /// When specified, will use this manifest path instead of auto-detecting
+    #[arg(long)]
+    pub manifest_path: Option<PathBuf>,
+
+    /// Root path of the repository to analyze
+    /// When specified, will use this as the base directory for manifest path
+    #[arg(long)]
+    pub root_path: Option<PathBuf>,
 }
 
 impl CGArgs {
