@@ -206,10 +206,10 @@ You can specify multiple target functions to find callers for all of them in a s
 
 ```bash
 # Using multiple --find-callers options
-call-cg4rs --find-callers "std::collections::HashMap::insert" --find-callers "std::collections::HashMap::get"
+call-cg4rs --find-callers "std::collections::HashMap::insert" "std::collections::HashMap::get"
 
 # Mix of different function types
-call-cg4rs --find-callers "DataStore::total_value" --find-callers "Product::discounted_price" --find-callers "std::collections::HashMap::new"
+call-cg4rs --find-callers "DataStore::total_value" "Product::discounted_price" "std::collections::HashMap::new"
 ```
 
 When multiple targets are specified:
