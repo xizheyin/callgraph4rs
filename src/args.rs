@@ -34,7 +34,7 @@ pub struct CGArgs {
 
     /// Find all callers of the specified function path
     /// When specified, will output all functions that directly or indirectly call this function
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     pub find_callers: Vec<String>,
 
     /// Output the call graph as JSON format

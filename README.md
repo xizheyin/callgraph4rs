@@ -186,61 +186,44 @@ To find all functions that directly or indirectly call a specific function:
 call-cg4rs --find-callers "std::collections::HashMap::insert"
 ```
 
-This will generate a report of all callers in `./target/callers-std::collections::HashMap::insert.txt`. The report includes each caller function along with its path constraints count, which represents the accumulated number of control flow constraints along the shortest calling path.
+This will generate a report of all callers in `./target/callers_1.txt`. The report includes each caller function along with its path constraints count, which represents the accumulated number of control flow constraints along the shortest calling path.
 
-**Note**: The output filename includes the target function path to avoid conflicts when analyzing multiple functions. For example:
-- `callers-std::collections::HashMap::insert.txt` for the HashMap::insert function
-- `callers-DataStore::total_value.txt` for the DataStore::total_value function
-
-You can also generate a JSON format report by combining with the `--json-output` option:
+**Multiple Targets:**
+You can specify multiple target functions by separating them with commas (no spaces):
 
 ```bash
-call-cg4rs --find-callers "std::collections::HashMap::insert" --json-output
+call-cg4rs --find-callers "foo,bar,baz"
 ```
 
-This will output the callers information in JSON format to `./target/callers-std::collections::HashMap::insert.json`, which is useful for programmatic processing or visualization.
+This will generate `callers_1.txt`, `callers_2.txt`, `callers_3.txt` for each target respectively.
 
-### Finding Callers of Multiple Functions
-
-You can specify multiple target functions to find callers for all of them in a single command:
+You can also generate JSON reports with:
 
 ```bash
-# Using multiple --find-callers options
-call-cg4rs --find-callers "std::collections::HashMap::insert" "std::collections::HashMap::get"
-
-# Mix of different function types
-call-cg4rs --find-callers "DataStore::total_value" "Product::discounted_price" "std::collections::HashMap::new"
+call-cg4rs --find-callers "foo,bar,baz" --json-output
 ```
 
-When multiple targets are specified:
-- Each target will be processed separately
-- Results will be saved to separate files: `callers-{target_path}.txt`, `callers-{target_path}.json`, etc.
-- The filename includes the target function path for easy identification
+Each target will produce a corresponding `callers_1.json`, `callers_2.json`, etc.
 
-This is useful for batch analysis of related functions or when you want to compare callers of different functions in your codebase.
+**Note:** Use English commas to separate multiple targets, and do not add spaces.
 
 ### Path Matching Behavior
 
-You can use a partial path - the tool will match any function containing that substring. The matching behavior works as follows:
+You can use a partial path; the tool will match any function containing that substring. The matching behavior is as follows:
 
-- If the path includes generic parameters (contains `<` character), it will match against the full function path including generic parameters or the basic path
-- If the path does not include generic parameters, the tool will intelligently remove all generic parameter sections (`::<...>`) from function paths before matching, providing clean results when searching for generic functions
+- If the path contains `<`, it will match against the full function path including generic parameters or the base path.
+- If the path does not contain `<`, the tool will automatically remove all generic parameter sections (`::<...>`) from function paths before matching, providing clean results when searching for generic functions.
 
 Examples:
 ```bash
 # Match any DataStore::total_value regardless of generic parameters
-# This will remove all generic parts from paths when matching
 call-cg4rs --find-callers "DataStore::total_value"
 
-# Find callers of other crates
-call-cg4rs --find-callers "std::collections::HashMap::new"
+# Find callers for multiple targets at once
+call-cg4rs --find-callers "DataStore::total_value,Product::discounted_price,std::collections::HashMap::new"
 
-# Match only functions that contain this specific generic instantiation in their path
-# Using precise generic parameter syntax to match specific instances
-RUST_LOG=off call-cg4rs --find-callers "DataStore::<Electronics>::total_value"
-
-# Find all callers of HashMap::new method from standard library, using full generic path
-RUST_LOG=off call-cg4rs --find-callers "std::collections::HashMap::<K, V>::new"
+# Match a specific generic instantiation
+call-cg4rs --find-callers "DataStore::<Electronics>::total_value"
 ```
 
 ### Performance Timing
