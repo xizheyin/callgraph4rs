@@ -57,5 +57,9 @@ pub fn collect_generic_instances(tcx: ty::TyCtxt<'_>) -> Vec<FunctionInstance<'_
             }
         }
     }
+
+    // Log the number of instances found
+    tracing::info!("Collected {} generic instances", instances.len());
+
     instances
 }

@@ -1,6 +1,5 @@
 use clap::Parser;
 use rustc_hash::FxHashMap;
-use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Value};
 use std::path::PathBuf;
@@ -36,12 +35,7 @@ pub struct CGArgs {
     /// Find all callers of the specified function path
     /// When specified, will output all functions that directly or indirectly call this function
     #[arg(long)]
-    pub find_callers: Option<String>,
-
-    /// Find all callers of function with the specified def_path_hash
-    /// When specified, will output all functions that directly or indirectly call the function with this hash
-    #[arg(long)]
-    pub find_callers_by_hash: Option<String>,
+    pub find_callers: Vec<String>,
 
     /// Output the call graph as JSON format
     /// This provides machine-readable data for further processing
@@ -95,8 +89,6 @@ impl CGArgs {
             }
         }
 
-        println!("{map:?}");
-
         map
     }
 }
@@ -110,10 +102,4 @@ pub struct AllCliArgs {
 
     #[command(flatten)]
     pub cg_args: CGArgs,
-}
-
-impl AllCliArgs {
-    pub fn _verify_options(&mut self, _tcx: TyCtxt<'_>) {
-        tracing::info!("CG runs under options: {:?}", self);
-    }
 }

@@ -5,13 +5,17 @@
 //! 2. Collect execution time statistics
 //! 3. Write timer results to a file
 //! 4. Global access through a singleton pattern
+use anyhow::Result;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use itertools::Itertools;
+
+use crate::args::CGArgs;
 
 // Global timer instance
 lazy_static::lazy_static! {
@@ -47,6 +51,18 @@ impl Timer {
             timers: Arc::new(Mutex::new(HashMap::new())),
             output_file: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn init(plugin_args: &CGArgs) {
+        // Set up timer output file
+        let timer_output_path = plugin_args.timer_output.clone().unwrap_or_else(|| {
+            plugin_args
+                .output_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("./target"))
+                .join("cg_timing.txt")
+        });
+        Timer::set_output_file(timer_output_path.to_str().unwrap());
     }
 
     /// Sets the output file for timer results
@@ -127,7 +143,7 @@ impl Timer {
 
     /// Writes all timer results to the configured output file
     /// If no file is configured, prints to the log instead
-    pub fn write_to_file() -> std::io::Result<()> {
+    pub fn write_to_file() -> Result<()> {
         let timers = TIMER.timers.lock().unwrap();
         let output_file = TIMER.output_file.lock().unwrap();
 
@@ -168,7 +184,7 @@ impl Timer {
 
     /// Appends timer results to the configured output file
     /// If no file is configured, prints to the log instead
-    pub fn append_to_file() -> std::io::Result<()> {
+    pub fn append_to_file() -> Result<()> {
         let timers = TIMER.timers.lock().unwrap();
         let output_file = TIMER.output_file.lock().unwrap();
 
@@ -209,10 +225,7 @@ impl Timer {
     }
 }
 
-fn write_timers_to_file(
-    mut file: File,
-    timers: &HashMap<String, TimerData>,
-) -> std::io::Result<()> {
+fn write_timers_to_file(mut file: File, timers: &HashMap<String, TimerData>) -> Result<()> {
     writeln!(file, "Timer Report - {}", chrono::Local::now())?;
     writeln!(file, "{:-<60}", "")?;
     writeln!(

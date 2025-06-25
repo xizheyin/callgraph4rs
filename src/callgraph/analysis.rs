@@ -234,16 +234,10 @@ pub(crate) fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<Func
 pub(crate) fn perform_mono_analysis<'tcx>(
     tcx: ty::TyCtxt<'tcx>,
     instances: Vec<FunctionInstance<'tcx>>,
-    options: &crate::args::CGArgs,
+    args: &crate::args::CGArgs,
 ) -> CallGraph<'tcx> {
-    let mut call_graph = CallGraph::new(instances, options.without_args);
+    let mut call_graph = CallGraph::new(instances, args.without_args);
     let mut visited = HashSet::new();
-    let mut total_call_sites = 0;
-
-    // Track processing progress with timestamps
-    let start_time = std::time::Instant::now();
-    let mut last_progress_time = start_time;
-    let progress_interval = std::time::Duration::from_secs(5);
 
     while let Some(instance) = call_graph.instances.pop_front() {
         if visited.contains(&instance) {
@@ -251,22 +245,7 @@ pub(crate) fn perform_mono_analysis<'tcx>(
         }
         visited.insert(instance);
 
-        // Time collection of call sites for each instance
         let call_sites = timer::measure("instance_callsites", || instance.collect_callsites(tcx));
-
-        total_call_sites += call_sites.len();
-
-        // Log progress periodically
-        let now = std::time::Instant::now();
-        if now.duration_since(last_progress_time) > progress_interval {
-            tracing::info!(
-                "Analysis progress: {} instances analyzed, {} call sites found, {} in queue",
-                visited.len(),
-                total_call_sites,
-                call_graph.instances.len()
-            );
-            last_progress_time = now;
-        }
 
         for call_site in call_sites {
             call_graph.instances.push_back(call_site.callee());
@@ -274,17 +253,14 @@ pub(crate) fn perform_mono_analysis<'tcx>(
         }
     }
 
-    // Log final statistics
-    let elapsed = start_time.elapsed();
     tracing::info!(
-        "Analysis complete: {} instances analyzed, {} call sites found in {:?}",
+        "Analysis complete: {} instances analyzed, {} call sites found",
         visited.len(),
-        total_call_sites,
-        elapsed
+        call_graph.call_sites.len(),
     );
 
     // Deduplicate call sites if deduplication is not disabled
-    if !options.no_dedup {
+    if !args.no_dedup {
         tracing::info!("Deduplication enabled - removing duplicate call sites");
         timer::measure("deduplicate_call_sites", || {
             call_graph.deduplicate_call_sites()

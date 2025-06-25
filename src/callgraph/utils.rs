@@ -259,18 +259,4 @@ impl<'tcx> CallGraph<'tcx> {
             }
         })
     }
-
-    /// Find all functions that directly or indirectly call the function with specified hash
-    pub fn find_callers_by_hash(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        target_hash: &str,
-    ) -> Option<Vec<(FunctionInstance<'tcx>, usize)>> {
-        let target_hash_owned = target_hash.to_string(); // Create owned copy for closure
-        self.find_callers_by_predicate(tcx, &format!("hash: {}", target_hash), move |func, tcx| {
-            let def_id = func.def_id();
-            let func_hash = format!("{}", tcx.def_path_hash(def_id).0);
-            func_hash == target_hash_owned
-        })
-    }
 }

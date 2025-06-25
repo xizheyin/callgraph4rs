@@ -71,9 +71,7 @@ Options:
       --no-dedup
           No deduplication for call sites When enabled, keeps all call sites for the same caller-callee pair
       --find-callers <FIND_CALLERS>
-          Find all callers of the specified function path When specified, will output all functions that directly or indirectly call this function
-      --find-callers-by-hash <FIND_CALLERS_BY_HASH>
-          Find all callers of function with the specified def_path_hash When specified, will output all functions that directly or indirectly call the function with this hash
+          Find all callers of the specified function path(s) When specified, will output all functions that directly or indirectly call these functions. Can be specified multiple times for multiple targets
       --json-output
           Output the call graph as JSON format This provides machine-readable data for further processing
       --without-args
@@ -185,44 +183,43 @@ This format is ideal for further processing or visualization with external tools
 To find all functions that directly or indirectly call a specific function:
 
 ```bash
-call-cg4rs --find-callers-of "std::collections::HashMap::insert"
+call-cg4rs --find-callers "std::collections::HashMap::insert"
 ```
 
-This will generate a report of all callers in `./target/callers.txt`. The report includes each caller function along with its path constraints count, which represents the accumulated number of control flow constraints along the shortest calling path.
+This will generate a report of all callers in `./target/callers-std::collections::HashMap::insert.txt`. The report includes each caller function along with its path constraints count, which represents the accumulated number of control flow constraints along the shortest calling path.
+
+**Note**: The output filename includes the target function path to avoid conflicts when analyzing multiple functions. For example:
+- `callers-std::collections::HashMap::insert.txt` for the HashMap::insert function
+- `callers-DataStore::total_value.txt` for the DataStore::total_value function
 
 You can also generate a JSON format report by combining with the `--json-output` option:
 
 ```bash
-call-cg4rs --find-callers-of "std::collections::HashMap::insert" --json-output
+call-cg4rs --find-callers "std::collections::HashMap::insert" --json-output
 ```
 
-This will output the callers information in JSON format to `./target/callers.json`, which is useful for programmatic processing or visualization.
+This will output the callers information in JSON format to `./target/callers-std::collections::HashMap::insert.json`, which is useful for programmatic processing or visualization.
 
-Example JSON structure for callers:
-```json
-{
-  "target": "std::collections::HashMap::insert",
-  "total_callers": 3,
-  "callers": [
-    {
-      "name": "my_module::my_function",
-      "version": "1.0.0",
-      "path": "my_crate::my_module::my_function",
-      "path_hash": "7f21c985b3ab412c",
-      "path_constraints": 5
-    },
-    {
-      "name": "another_function",
-      "version": "0.5.2",
-      "path": "other_crate::another_function",
-      "path_hash": "d23f91e6a0189f50",
-      "path_constraints": 8
-    }
-  ]
-}
+### Finding Callers of Multiple Functions
+
+You can specify multiple target functions to find callers for all of them in a single command:
+
+```bash
+# Using multiple --find-callers options
+call-cg4rs --find-callers "std::collections::HashMap::insert" --find-callers "std::collections::HashMap::get"
+
+# Mix of different function types
+call-cg4rs --find-callers "DataStore::total_value" --find-callers "Product::discounted_price" --find-callers "std::collections::HashMap::new"
 ```
 
-The `path_constraints` field indicates the accumulated number of control flow constraints along the call path. Lower values generally indicate more direct or simpler calling paths.
+When multiple targets are specified:
+- Each target will be processed separately
+- Results will be saved to separate files: `callers-{target_path}.txt`, `callers-{target_path}.json`, etc.
+- The filename includes the target function path for easy identification
+
+This is useful for batch analysis of related functions or when you want to compare callers of different functions in your codebase.
+
+### Path Matching Behavior
 
 You can use a partial path - the tool will match any function containing that substring. The matching behavior works as follows:
 
@@ -233,47 +230,18 @@ Examples:
 ```bash
 # Match any DataStore::total_value regardless of generic parameters
 # This will remove all generic parts from paths when matching
-call-cg4rs --find-callers-of "DataStore::total_value"
+call-cg4rs --find-callers "DataStore::total_value"
 
 # Find callers of other crates
-call-cg4rs --find-callers-of "std::collections::HashMap::new"
+call-cg4rs --find-callers "std::collections::HashMap::new"
 
 # Match only functions that contain this specific generic instantiation in their path
 # Using precise generic parameter syntax to match specific instances
-RUST_LOG=off call-cg4rs --find-callers-of "DataStore::<Electronics>::total_value"
+RUST_LOG=off call-cg4rs --find-callers "DataStore::<Electronics>::total_value"
 
 # Find all callers of HashMap::new method from standard library, using full generic path
-RUST_LOG=off call-cg4rs --find-callers-of "std::collections::HashMap::<K, V>::new"
-
-# Find callers using the exact DefPathHash (more precise than path matching)
-call-cg4rs --find-callers-by-hash "8f219f8a15822e31"
+RUST_LOG=off call-cg4rs --find-callers "std::collections::HashMap::<K, V>::new"
 ```
-
-### Finding Functions by DefPathHash
-
-For precise function lookup, you can use the `--find-callers-by-hash` option with the DefPathHash value:
-
-```bash
-call-cg4rs --find-callers-by-hash "8f219f8a15822e31"
-```
-
-This approach provides a more reliable way to find functions than using paths, especially when:
-- The same function name appears in multiple modules
-- Working with complex generic instantiations
-- Dealing with mangled function names
-
-You can find the DefPathHash in the standard output of any call graph report - each function path
-is displayed with its hash in square brackets, e.g., `DataStore::total_value [8f219f8a15822e31]`.
-
-This can also be combined with the `--json-output` option to get a JSON representation:
-
-```bash
-call-cg4rs --find-callers-by-hash "8f219f8a15822e31" --json-output
-```
-
-The results will be available in `./target/callers_by_hash.txt` or `./target/callers_by_hash.json`.
-
-> **Note**: The `--find-callers-of` and `--find-callers-by-hash` options are mutually exclusive. If both are specified, `--find-callers-of` will be used and `--find-callers-by-hash` will be ignored.
 
 ### Performance Timing
 
@@ -342,10 +310,10 @@ This repository includes a test project (`test_callgraph`) designed to test the 
 5. Try finding callers of specific functions, for example:
    ```bash
    # Find all callers of Product::discounted_price
-   call-cg4rs --find-callers-of "Product::discounted_price"
+   call-cg4rs --find-callers "Product::discounted_price"
    
    # Find all callers of DataStore::calculate_value_with_strategy
-   call-cg4rs --find-callers-of "DataStore::calculate_value_with_strategy"
+   call-cg4rs --find-callers "DataStore::calculate_value_with_strategy"
    ```
 
 6. To see all possible call paths without deduplication:

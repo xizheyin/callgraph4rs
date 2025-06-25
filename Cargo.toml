@@ -23,6 +23,7 @@ bit-vec = "0.8.0"
 html-escape = {workspace = true}
 lazy_static = "1.4.0"
 chrono = "0.4"
+anyhow = "1"
 
 [package.metadata.rust-analyzer]
 rustc_private = true

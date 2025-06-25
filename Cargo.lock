@@ -185,6 +185,7 @@ name = "cg4rs"
 version = "0.1.0"
 dependencies = [
  "ansi_term",
+ "anyhow",
  "bit-vec",
  "chrono",
  "clap",
