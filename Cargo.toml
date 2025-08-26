@@ -24,6 +24,8 @@ html-escape = {workspace = true}
 lazy_static = "1.4.0"
 chrono = "0.4"
 anyhow = "1"
+tokio = { version = "1.0", features = ["full"] }
+libc = "0.2"
 
 [package.metadata.rust-analyzer]
 rustc_private = true
