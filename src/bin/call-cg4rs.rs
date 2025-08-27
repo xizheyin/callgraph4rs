@@ -7,29 +7,37 @@ use tokio::process::Command;
 use tokio::signal;
 use tokio::sync::Mutex;
 
+struct Args {
+    skip_clean: bool,
+    project_root_dir: PathBuf,
+    manifest_path: Option<PathBuf>,
+    args_without_no_clean: Vec<String>,
+}
+
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> anyhow::Result<()> {
     // 设置信号处理
     let child_processes = Arc::new(Mutex::new(HashSet::<u32>::new()));
     setup_signal_handling(child_processes.clone()).await;
 
-    // 完全禁用日志
-    //std::env::set_var("RUST_LOG", "debug");
     std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir --cap-lints allow");
 
-    // 获取用户的主目录
-    let home_dir = env::var("HOME").expect("Could not find home directory");
-    let cargo_toolchain_path = Path::new(&home_dir).join(".cargo/rust-toolchain.toml");
-
-    // 检查 ~/.cargo/rust-toolchain.toml 是否存在
-    if !cargo_toolchain_path.exists() {
-        eprintln!("rust-toolchain.toml not found in ~/.cargo.");
-        return Ok(());
-    }
-
     // 获取命令行参数
-    let args: Vec<String> = env::args().skip(1).collect();
+    let Args {
+        skip_clean,
+        project_root_dir,
+        manifest_path,
+        args_without_no_clean,
+    } = args().await;
 
+    copy_toolchain_file(&project_root_dir).await?;
+    cargo_clean(skip_clean, manifest_path.as_deref(), &child_processes).await?;
+    cargo_cg4rs(args_without_no_clean, &child_processes).await?;
+    Ok(())
+}
+
+async fn args() -> Args {
+    let args: Vec<String> = env::args().skip(1).collect();
     // 处理root-path参数
     let mut root_path = None;
     let mut manifest_path = None;
@@ -66,7 +74,7 @@ async fn main() -> std::io::Result<()> {
     println!("manifest_path: {:?}", manifest_path);
 
     // 确定根目录，优先级：1. root_path 2. manifest_path所在目录 3. 当前目录
-    let root_dir = if let Some(path) = root_path {
+    let project_root_dir = if let Some(path) = root_path {
         path
     } else if let Some(path) = &manifest_path {
         // 如果提供了manifest路径，则使用其父目录
@@ -82,7 +90,7 @@ async fn main() -> std::io::Result<()> {
 
     let mut final_args = filtered_args.clone();
     if !has_manifest_path {
-        let manifest_path = root_dir.join("Cargo.toml");
+        let manifest_path = project_root_dir.join("Cargo.toml");
         if manifest_path.exists() {
             final_args.push(format!("--manifest-path={}", manifest_path.display()));
         } else {
@@ -92,10 +100,6 @@ async fn main() -> std::io::Result<()> {
             );
         }
     }
-
-    // 复制toolchain文件到根目录
-    let target_path = root_dir.join("rust-toolchain.toml");
-    fs::copy(&cargo_toolchain_path, &target_path)?;
 
     // 检查是否跳过clean
     let skip_clean = final_args.iter().any(|arg| arg == "--no-clean");
@@ -107,6 +111,37 @@ async fn main() -> std::io::Result<()> {
         .cloned()
         .collect();
 
+    Args {
+        skip_clean,
+        project_root_dir,
+        manifest_path,
+        args_without_no_clean,
+    }
+}
+
+async fn copy_toolchain_file(project_root_dir: &Path) -> anyhow::Result<()> {
+    // 获取用户的主目录
+    let home_dir = env::var("HOME").expect("Could not find home directory");
+    let cargo_toolchain_path = Path::new(&home_dir).join(".cargo/rust-toolchain.toml");
+    // Check if ~/.cargo/rust-toolchain.toml exists
+    // This is because in build.rs, we copy the rust-toolchain.toml to `~/.cargo/rust-toolchain.toml`
+    // We should copy it to the root directory of the project we are analyzing
+    // to make sure the toolchain is the same as the one used to build the project
+    if !cargo_toolchain_path.exists() {
+        eprintln!("rust-toolchain.toml not found in ~/.cargo.");
+        return Ok(());
+    }
+    // Copy toolchain file to the root directory of the project we are analyzing
+    let target_path = project_root_dir.join("rust-toolchain.toml");
+    fs::copy(&cargo_toolchain_path, &target_path)?;
+    Ok(())
+}
+
+async fn cargo_clean(
+    skip_clean: bool,
+    manifest_path: Option<&Path>,
+    child_processes: &Arc<Mutex<HashSet<u32>>>,
+) -> anyhow::Result<()> {
     if !skip_clean {
         tracing::trace!("Start to cargo clean.");
 
@@ -146,7 +181,13 @@ async fn main() -> std::io::Result<()> {
     } else {
         tracing::debug!("Skip to clean.");
     }
+    Ok(())
+}
 
+async fn cargo_cg4rs(
+    args_without_no_clean: Vec<String>,
+    child_processes: &Arc<Mutex<HashSet<u32>>>,
+) -> anyhow::Result<()> {
     // 执行cargo cg4rs命令
     let mut cg_args = vec!["cg4rs".to_string()];
     cg_args.extend(args_without_no_clean.clone());
