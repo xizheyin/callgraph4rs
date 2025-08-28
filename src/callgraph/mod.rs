@@ -74,7 +74,7 @@ fn output_find_callers_results<'tcx>(
                     target_path,
                     callers_with_constraints,
                     args,
-                    &format!("callers-{}", target_path),
+                    &format!("callers-{target_path}"),
                 )
             });
         }

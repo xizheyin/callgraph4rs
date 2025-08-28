@@ -1,10 +1,11 @@
+#![feature(rustc_private)]
+use cg4rs::{setup_signal_handling, start_process_tree_monitoring};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::process::Command;
-use tokio::signal;
 use tokio::sync::Mutex;
 
 struct Args {
@@ -16,9 +17,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 设置信号处理
-    let child_processes = Arc::new(Mutex::new(HashSet::<u32>::new()));
-    setup_signal_handling(child_processes.clone()).await;
+    let desendent_processes = Arc::new(Mutex::new(HashSet::<u32>::new()));
+    // 启动进程树监控
+    start_process_tree_monitoring(desendent_processes.clone()).await;
+    // 设置信号处理，收到SIGINT/SIGTERM时，终止子孙进程
+    setup_signal_handling(desendent_processes.clone()).await;
 
     std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir --cap-lints allow");
 
@@ -31,8 +34,8 @@ async fn main() -> anyhow::Result<()> {
     } = args().await;
 
     copy_toolchain_file(&project_root_dir).await?;
-    cargo_clean(skip_clean, manifest_path.as_deref(), &child_processes).await?;
-    cargo_cg4rs(args_without_no_clean, &child_processes).await?;
+    cargo_clean(skip_clean, manifest_path.as_deref()).await?;
+    cargo_cg4rs(args_without_no_clean).await?;
     Ok(())
 }
 
@@ -71,7 +74,7 @@ async fn args() -> Args {
         }
         i += 1;
     }
-    println!("manifest_path: {:?}", manifest_path);
+    println!("manifest_path: {manifest_path:?}");
 
     // 确定根目录，优先级：1. root_path 2. manifest_path所在目录 3. 当前目录
     let project_root_dir = if let Some(path) = root_path {
@@ -137,11 +140,7 @@ async fn copy_toolchain_file(project_root_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cargo_clean(
-    skip_clean: bool,
-    manifest_path: Option<&Path>,
-    child_processes: &Arc<Mutex<HashSet<u32>>>,
-) -> anyhow::Result<()> {
+async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::Result<()> {
     if !skip_clean {
         tracing::trace!("Start to cargo clean.");
 
@@ -156,22 +155,12 @@ async fn cargo_clean(
         println!("Executing: cargo {}", clean_args.join(" "));
 
         // 一次性传递所有参数，使用 tokio 异步执行
-        let mut child = create_async_process_group_command("cargo", &child_processes)
+        let mut child = Command::new("cargo")
             .args(clean_args)
             .spawn()
             .expect("Failed to execute cargo clean");
 
-        // 记录子进程 PID
-        if let Some(pid) = child.id() {
-            child_processes.lock().await.insert(pid);
-        }
-
         let status = child.wait().await.expect("Failed to wait for cargo clean");
-
-        // 清理 PID 记录
-        if let Some(pid) = child.id() {
-            child_processes.lock().await.remove(&pid);
-        }
 
         if !status.success() {
             eprintln!("cargo clean failed");
@@ -184,10 +173,7 @@ async fn cargo_clean(
     Ok(())
 }
 
-async fn cargo_cg4rs(
-    args_without_no_clean: Vec<String>,
-    child_processes: &Arc<Mutex<HashSet<u32>>>,
-) -> anyhow::Result<()> {
+async fn cargo_cg4rs(args_without_no_clean: Vec<String>) -> anyhow::Result<()> {
     // 执行cargo cg4rs命令
     let mut cg_args = vec!["cg4rs".to_string()];
     cg_args.extend(args_without_no_clean.clone());
@@ -195,22 +181,12 @@ async fn cargo_cg4rs(
     println!("Executing: cargo {}", cg_args.join(" "));
 
     // 一次性传递所有参数，使用 tokio 异步执行
-    let mut child = create_async_process_group_command("cargo", &child_processes)
+    let mut child = Command::new("cargo")
         .args(cg_args)
         .spawn()
         .expect("Failed to execute cargo cg4rs");
 
-    // 记录子进程 PID
-    if let Some(pid) = child.id() {
-        child_processes.lock().await.insert(pid);
-    }
-
     let status = child.wait().await.expect("Failed to wait for cargo cg4rs");
-
-    // 清理 PID 记录
-    if let Some(pid) = child.id() {
-        child_processes.lock().await.remove(&pid);
-    }
 
     if !status.success() {
         eprintln!("cargo cg4rs failed");
@@ -218,89 +194,4 @@ async fn cargo_cg4rs(
 
     tracing::debug!("Finish to exec: cargo cg4rs");
     Ok(())
-}
-
-/// 设置信号处理，确保能优雅终止子进程
-async fn setup_signal_handling(child_processes: Arc<Mutex<HashSet<u32>>>) {
-    let child_processes_clone = child_processes.clone();
-
-    tokio::spawn(async move {
-        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
-            .expect("Failed to install SIGINT handler");
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler");
-
-        tokio::select! {
-            _ = sigint.recv() => {
-                eprintln!("Received SIGINT, terminating child processes...");
-                terminate_child_processes(&child_processes_clone).await;
-                std::process::exit(130); // 128 + SIGINT(2)
-            }
-            _ = sigterm.recv() => {
-                eprintln!("Received SIGTERM, terminating child processes...");
-                terminate_child_processes(&child_processes_clone).await;
-                std::process::exit(143); // 128 + SIGTERM(15)
-            }
-        }
-    });
-}
-
-/// 终止所有子进程
-async fn terminate_child_processes(child_processes: &Arc<Mutex<HashSet<u32>>>) {
-    let pids = {
-        let guard = child_processes.lock().await;
-        guard.clone()
-    };
-
-    for pid in pids {
-        // 首先尝试优雅终止
-        unsafe {
-            libc::killpg(pid as libc::pid_t, libc::SIGTERM);
-        }
-    }
-
-    // 等待一小段时间让进程优雅退出
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    // 强制终止仍在运行的进程
-    let pids = {
-        let guard = child_processes.lock().await;
-        guard.clone()
-    };
-
-    for pid in pids {
-        unsafe {
-            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-        }
-    }
-}
-
-/// 创建一个新的进程组命令，便于管理子进程
-fn create_async_process_group_command(
-    program: &str,
-    _child_processes: &Arc<Mutex<HashSet<u32>>>,
-) -> Command {
-    let mut cmd = Command::new(program);
-
-    // 在 Unix 系统上创建新的进程组并设置父进程死亡信号
-    #[cfg(unix)]
-    {
-        unsafe {
-            cmd.pre_exec(|| {
-                // 创建新的进程组
-                libc::setpgid(0, 0);
-
-                // 设置父进程死亡时发送SIGTERM给子进程
-                // 这样即使父进程被SIGKILL杀死，子进程也会收到SIGTERM
-                #[cfg(target_os = "linux")]
-                {
-                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                }
-
-                Ok(())
-            });
-        }
-    }
-
-    cmd
 }

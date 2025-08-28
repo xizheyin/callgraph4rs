@@ -194,7 +194,7 @@ impl<'tcx> CallGraph<'tcx> {
         tcx: TyCtxt<'tcx>,
         target_path: &str,
     ) -> Option<Vec<(FunctionInstance<'tcx>, usize)>> {
-        self.find_callers_by_predicate(tcx, &format!("path: {}", target_path), |func, tcx| {
+        self.find_callers_by_predicate(tcx, &format!("path: {target_path}"), |func, tcx| {
             // Get complete function path (including generic parameters)
             let full_func_path = self.function_instance_to_string(tcx, func);
 

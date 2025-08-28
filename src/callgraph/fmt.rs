@@ -56,12 +56,12 @@ impl<'tcx> CallGraph<'tcx> {
 
         // Sort callers to get consistent output
         let mut callers: Vec<FunctionInstance<'tcx>> = calls_by_caller.keys().cloned().collect();
-        callers.sort_by_key(|caller| format!("{:?}", caller));
+        callers.sort_by_key(|caller| format!("{caller:?}"));
 
         for caller in callers {
             // Get caller name
             let caller_name = self.function_instance_to_string(tcx, caller);
-            result.push_str(&format!("Function: {}\n", caller_name));
+            result.push_str(&format!("Function: {caller_name}\n"));
 
             // Get all calls from this caller
             if let Some(calls) = calls_by_caller.get(&caller) {
@@ -107,7 +107,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         // Sort callers to get consistent output
         let mut callers: Vec<FunctionInstance<'tcx>> = calls_by_caller.keys().cloned().collect();
-        callers.sort_by_key(|caller| format!("{:?}", caller));
+        callers.sort_by_key(|caller| format!("{caller:?}"));
 
         // Create the JSON array to hold all entries
         let mut json_entries = Vec::new();
@@ -189,18 +189,15 @@ impl<'tcx> CallGraph<'tcx> {
     ) -> String {
         let mut result = String::new();
 
-        result.push_str(&format!(
-            "Callers of functions matching '{}':\n",
-            target_path
-        ));
+        result.push_str(&format!("Callers of functions matching '{target_path}':\n"));
         result.push_str("==================================\n\n");
 
         // Sort callers to get consistent output - first by constraint count, then by name
         let mut sorted_callers = callers;
         sorted_callers.sort_by(|(a, a_constraints), (b, b_constraints)| {
             a_constraints.cmp(b_constraints).then_with(|| {
-                let a_name = format!("{:?}", a);
-                let b_name = format!("{:?}", b);
+                let a_name = format!("{a:?}");
+                let b_name = format!("{b:?}");
                 a_name.cmp(&b_name)
             })
         });
@@ -208,8 +205,7 @@ impl<'tcx> CallGraph<'tcx> {
         for (caller, constraints) in &sorted_callers {
             let caller_name = self.function_instance_to_string(tcx, *caller);
             result.push_str(&format!(
-                "- {} [path constraints: {}]\n",
-                caller_name, constraints
+                "- {caller_name} [path constraints: {constraints}]\n"
             ));
         }
 
@@ -231,8 +227,8 @@ impl<'tcx> CallGraph<'tcx> {
         let mut sorted_callers = callers;
         sorted_callers.sort_by(|(a, a_constraints), (b, b_constraints)| {
             a_constraints.cmp(b_constraints).then_with(|| {
-                let a_name = format!("{:?}", a);
-                let b_name = format!("{:?}", b);
+                let a_name = format!("{a:?}");
+                let b_name = format!("{b:?}");
                 a_name.cmp(&b_name)
             })
         });
@@ -281,7 +277,7 @@ pub(crate) fn output_call_graph_result<'tcx>(
         .output_dir
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("./target"));
-    let output_path = output_dir.join(format!("{}-callgraph.txt", crate_name));
+    let output_path = output_dir.join(format!("{crate_name}-callgraph.txt"));
 
     // If JSON output is requested, write call graph as JSON
     if options.json_output {
@@ -302,14 +298,14 @@ pub(crate) fn output_call_graph_result<'tcx>(
     } else {
         let formatted_callgraph = call_graph.format_call_graph(tcx);
 
-        match write_to_file(&output_path, |file| write!(file, "{}", formatted_callgraph)) {
+        match write_to_file(&output_path, |file| write!(file, "{formatted_callgraph}")) {
             Ok(_) => tracing::info!("Call graph written to {}", output_path.display()),
             Err(e) => tracing::error!("Failed to write call graph: {}", e),
         }
     }
 
     if options.cg_debug {
-        let debug_path = output_dir.join(format!("{}-callgraph-debug.txt", crate_name));
+        let debug_path = output_dir.join(format!("{crate_name}-callgraph-debug.txt"));
         let _ = write_to_file(&debug_path, |file| {
             writeln!(file, "call_graph: {:#?}", call_graph.call_sites)
         });
@@ -337,7 +333,7 @@ pub(crate) fn output_callers_result<'tcx>(
         let callers_json = call_graph.format_callers_as_json(tcx, target, callers);
 
         // Output to JSON file
-        let json_output_path = output_dir.join(format!("{}.json", file_prefix));
+        let json_output_path = output_dir.join(format!("{file_prefix}.json"));
 
         if let Err(e) = std::fs::write(&json_output_path, callers_json) {
             tracing::error!("Failed to write callers to JSON file: {:?}", e);
@@ -349,7 +345,7 @@ pub(crate) fn output_callers_result<'tcx>(
         let callers_output = call_graph.format_callers(tcx, target, callers);
 
         // Output to text file
-        let output_path = output_dir.join(format!("{}.txt", file_prefix));
+        let output_path = output_dir.join(format!("{file_prefix}.txt"));
 
         if let Err(e) = std::fs::write(&output_path, callers_output) {
             tracing::error!("Failed to write callers to file: {:?}", e);
