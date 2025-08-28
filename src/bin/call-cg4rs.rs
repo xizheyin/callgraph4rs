@@ -282,13 +282,21 @@ fn create_async_process_group_command(
 ) -> Command {
     let mut cmd = Command::new(program);
 
-    // 在 Unix 系统上创建新的进程组
+    // 在 Unix 系统上创建新的进程组并设置父进程死亡信号
     #[cfg(unix)]
     {
-        // 创建新的进程组
         unsafe {
             cmd.pre_exec(|| {
+                // 创建新的进程组
                 libc::setpgid(0, 0);
+
+                // 设置父进程死亡时发送SIGTERM给子进程
+                // 这样即使父进程被SIGKILL杀死，子进程也会收到SIGTERM
+                #[cfg(target_os = "linux")]
+                {
+                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                }
+
                 Ok(())
             });
         }
