@@ -1,3 +1,7 @@
 /target
 
-test_callgraph/target
+# 忽略下载的 crate，但保留测试目录
+test_callgraph/*
+test_callgraph/*/target
+!test_callgraph/test1/
+!test_callgraph/fetch_crate.sh
