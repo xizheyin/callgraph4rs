@@ -7,16 +7,16 @@ version = "0.1.0"
 rustc_private = true
 
 [dependencies]
-cargo_metadata = "0.22.0"
-cargo-util-schemas = "0.8.2"
+cargo_metadata.workspace = true
+cargo-util-schemas.workspace = true
 rustc_tools_util = "0.4.0"
-serde = {workspace = true}
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true
 tracing = {workspace = true}
 
 
 [dev-dependencies]
-anyhow = {version = "1", features = ["backtrace"]}
+anyhow.workspace = true
 
 [build-dependencies]
-toml = "0.9.5"
+toml.workspace = true
