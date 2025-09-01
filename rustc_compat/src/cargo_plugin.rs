@@ -1,6 +1,7 @@
 use super::plugin::{Plugin, PLUGIN_ARGS};
 use crate::CrateFilter;
 use cargo_metadata::camino::Utf8Path;
+use cargo_util_schemas::manifest::PackageName;
 use std::ops::Index;
 use std::{
     env, fs,
@@ -101,7 +102,10 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
     cmd.env(PLUGIN_ARGS, args_str);
 
     // 特殊处理 rustc 代码库的编译
-    if workspace_members.iter().any(|pkg| pkg.name == "rustc-main") {
+    if workspace_members
+        .iter()
+        .any(|pkg| pkg.name == PackageName::new("rustc-main".to_string()).unwrap())
+    {
         cmd.env("CFG_RELEASE", "");
     }
 

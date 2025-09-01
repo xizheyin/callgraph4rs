@@ -44,7 +44,23 @@ pub fn analyze_crate<'tcx>(
 
     // Handle find_callers_of
     crate::timer::measure("output_find_callers_results", || {
-        output_find_callers_results(&call_graph, tcx, args)
+        for target_path in &args.find_callers {
+            tracing::info!("Finding callers of function: {}", target_path);
+            if let Some(callers_with_constraints) =
+                call_graph.find_callers_by_path(tcx, target_path)
+            {
+                crate::timer::measure("output_callers_result", || {
+                    output_callers_result(
+                        &call_graph,
+                        tcx,
+                        target_path,
+                        callers_with_constraints,
+                        args,
+                        &format!("callers-{target_path}"),
+                    )
+                });
+            }
+        }
     });
 
     crate::timer::measure("output_call_graph_result", || {
@@ -52,31 +68,4 @@ pub fn analyze_crate<'tcx>(
     });
 
     call_graph
-}
-
-/// Handle find_callers_of
-fn output_find_callers_results<'tcx>(
-    call_graph: &CallGraph<'tcx>,
-    tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    args: &crate::args::CGArgs,
-) {
-    if args.find_callers.is_empty() {
-        return;
-    }
-
-    for target_path in &args.find_callers {
-        tracing::info!("Finding callers of function: {}", target_path);
-        if let Some(callers_with_constraints) = call_graph.find_callers_by_path(tcx, target_path) {
-            crate::timer::measure("output_callers_result", || {
-                output_callers_result(
-                    call_graph,
-                    tcx,
-                    target_path,
-                    callers_with_constraints,
-                    args,
-                    &format!("callers-{target_path}"),
-                )
-            });
-        }
-    }
 }

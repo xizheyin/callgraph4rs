@@ -1,3 +1,4 @@
+use crate::callgraph::types::PathInfo;
 use crate::callgraph::utils::get_crate_version;
 use crate::callgraph::CallGraph;
 use rustc_middle::ty::TyCtxt;
@@ -146,7 +147,7 @@ impl<'tcx> CallGraph<'tcx> {
                         "version": version,
                         "path": callee_path,
                         "constraint_depth": call.constraint_count(),
-                        "path_hash": format!("{}", tcx.def_path_hash(callee_def_id).0)
+                        "package_num": call.package_num()
                     }));
                 }
 
@@ -167,7 +168,6 @@ impl<'tcx> CallGraph<'tcx> {
                         "version": caller_version,
                         "path": caller_path,
                         "constraint_depth": max_constraint_depth,
-                        "path_hash": format!("{}", tcx.def_path_hash(caller_def_id).0)
                     },
                     "callee": callees
                 });
@@ -185,7 +185,7 @@ impl<'tcx> CallGraph<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         target_path: &str,
-        callers: Vec<(FunctionInstance<'tcx>, usize)>,
+        callers: Vec<PathInfo<'tcx>>,
     ) -> String {
         let mut result = String::new();
 
@@ -194,18 +194,17 @@ impl<'tcx> CallGraph<'tcx> {
 
         // Sort callers to get consistent output - first by constraint count, then by name
         let mut sorted_callers = callers;
-        sorted_callers.sort_by(|(a, a_constraints), (b, b_constraints)| {
-            a_constraints.cmp(b_constraints).then_with(|| {
-                let a_name = format!("{a:?}");
-                let b_name = format!("{b:?}");
-                a_name.cmp(&b_name)
-            })
-        });
+        sorted_callers.sort();
 
-        for (caller, constraints) in &sorted_callers {
+        for PathInfo {
+            caller,
+            constraints,
+            package_num,
+        } in &sorted_callers
+        {
             let caller_name = self.function_instance_to_string(tcx, *caller);
             result.push_str(&format!(
-                "- {caller_name} [path constraints: {constraints}]\n"
+                "- {caller_name} [path constraints: {constraints}, package num: {package_num}]\n"
             ));
         }
 
@@ -221,22 +220,21 @@ impl<'tcx> CallGraph<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         target_path: &str,
-        callers: Vec<(FunctionInstance<'tcx>, usize)>,
+        callers: Vec<PathInfo<'tcx>>,
     ) -> String {
         // Sort callers to get consistent output - first by constraint count, then by name
         let mut sorted_callers = callers;
-        sorted_callers.sort_by(|(a, a_constraints), (b, b_constraints)| {
-            a_constraints.cmp(b_constraints).then_with(|| {
-                let a_name = format!("{a:?}");
-                let b_name = format!("{b:?}");
-                a_name.cmp(&b_name)
-            })
-        });
+        sorted_callers.sort();
 
         // Create array for caller information
         let mut caller_entries = Vec::new();
 
-        for (caller, constraints) in &sorted_callers {
+        for PathInfo {
+            caller,
+            constraints,
+            package_num,
+        } in &sorted_callers
+        {
             let caller_name = self.function_instance_to_string(tcx, *caller);
             let caller_def_id = caller.def_id();
             let caller_path = tcx.def_path_str(caller_def_id);
@@ -249,8 +247,8 @@ impl<'tcx> CallGraph<'tcx> {
                 "name": caller_name,
                 "version": version,
                 "path": caller_path,
-                "path_hash": format!("{}", tcx.def_path_hash(caller_def_id).0),
-                "path_constraints": constraints
+                "path_constraints": constraints,
+                "path_package_num": package_num
             }));
         }
 
@@ -317,7 +315,7 @@ pub(crate) fn output_callers_result<'tcx>(
     call_graph: &CallGraph<'tcx>,
     tcx: TyCtxt<'tcx>,
     target: &str,
-    callers: Vec<(FunctionInstance<'tcx>, usize)>,
+    callers: Vec<PathInfo<'tcx>>,
     options: &crate::args::CGArgs,
     file_prefix: &str,
 ) {

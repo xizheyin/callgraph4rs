@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
-use crate::callgraph::function::FunctionInstance;
+use crate::callgraph::{function::FunctionInstance, types::PathInfo};
 
 use super::CallGraph;
 
@@ -96,7 +96,7 @@ impl<'tcx> CallGraph<'tcx> {
         tcx: TyCtxt<'tcx>,
         target_description: &str,
         predicate: F,
-    ) -> Option<Vec<(FunctionInstance<'tcx>, usize)>>
+    ) -> Option<Vec<PathInfo<'tcx>>>
     where
         F: Fn(FunctionInstance<'tcx>, TyCtxt<'tcx>) -> bool,
     {
@@ -128,52 +128,58 @@ impl<'tcx> CallGraph<'tcx> {
         // Create mapping from callee to callers with constraint counts
         let mut callee_to_callers: HashMap<
             FunctionInstance<'tcx>,
-            HashMap<FunctionInstance<'tcx>, usize>,
+            HashMap<FunctionInstance<'tcx>, (usize, usize)>,
         > = HashMap::new();
 
         for call_site in &self.call_sites {
             let caller = call_site.caller();
             let callee = call_site.callee();
             let constraints = call_site.constraint_count();
+            let package_num = call_site.package_num();
 
             callee_to_callers
                 .entry(callee)
                 .or_default()
                 .entry(caller)
-                .and_modify(|c| *c += constraints)
-                .or_insert(constraints);
+                .and_modify(|(c, p)| {
+                    *c += constraints;
+                    *p += package_num;
+                })
+                .or_insert((constraints, package_num));
         }
 
         // Find all direct and indirect callers with constraint counts
-        let mut all_callers: HashMap<FunctionInstance<'tcx>, usize> = HashMap::new();
-        let mut queue: VecDeque<(FunctionInstance<'tcx>, usize)> =
-            target_functions.into_iter().map(|f| (f, 0)).collect();
+        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize)> = HashMap::new();
+        let mut queue: VecDeque<(FunctionInstance<'tcx>, (usize, usize))> =
+            target_functions.into_iter().map(|f| (f, (0, 0))).collect();
         let mut processed: HashSet<FunctionInstance<'tcx>> = HashSet::new();
 
-        while let Some((current, path_constraints)) = queue.pop_front() {
+        while let Some((current, (path_constraints, path_package_num))) = queue.pop_front() {
             if processed.contains(&current) {
                 continue;
             }
             processed.insert(current);
 
             if let Some(callers) = callee_to_callers.get(&current) {
-                for (caller, constraints) in callers {
+                for (caller, (constraints, package_num)) in callers {
                     // 累计约束数：当前路径约束 + 当前调用约束
                     let total_constraints = path_constraints + constraints;
+                    let total_package_num = path_package_num + package_num;
 
                     if !processed.contains(caller) {
                         // 插入或更新调用者的约束累计值
                         all_callers
                             .entry(*caller)
-                            .and_modify(|c| {
+                            .and_modify(|(c, p)| {
                                 // 如果已存在，取较小值（最短路径）
                                 if total_constraints < *c {
                                     *c = total_constraints;
                                 }
+                                *p = total_package_num;
                             })
-                            .or_insert(total_constraints);
+                            .or_insert((total_constraints, total_package_num));
 
-                        queue.push_back((*caller, total_constraints));
+                        queue.push_back((*caller, (total_constraints, total_package_num)));
                     }
                 }
             }
@@ -185,7 +191,16 @@ impl<'tcx> CallGraph<'tcx> {
         }
 
         // 返回调用者列表及其约束数量
-        Some(all_callers.into_iter().collect())
+        Some(
+            all_callers
+                .into_iter()
+                .map(|(caller, (constraints, package_num))| PathInfo {
+                    caller,
+                    constraints,
+                    package_num,
+                })
+                .collect(),
+        )
     }
 
     /// Find all functions that directly or indirectly call the specified function
@@ -193,7 +208,7 @@ impl<'tcx> CallGraph<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         target_path: &str,
-    ) -> Option<Vec<(FunctionInstance<'tcx>, usize)>> {
+    ) -> Option<Vec<PathInfo<'tcx>>> {
         self.find_callers_by_predicate(tcx, &format!("path: {target_path}"), |func, tcx| {
             // Get complete function path (including generic parameters)
             let full_func_path = self.function_instance_to_string(tcx, func);
