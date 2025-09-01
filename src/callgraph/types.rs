@@ -1,4 +1,25 @@
+use std::collections::VecDeque;
+
 use super::function::FunctionInstance;
+
+pub(crate) struct CallGraph<'tcx> {
+    pub(crate) instances: VecDeque<FunctionInstance<'tcx>>,
+    pub(crate) call_sites: Vec<CallSite<'tcx>>,
+    pub(crate) without_args: bool,
+}
+
+impl<'tcx> CallGraph<'tcx> {
+    pub(crate) fn new(
+        all_generic_instances: Vec<FunctionInstance<'tcx>>,
+        without_args: bool,
+    ) -> Self {
+        Self {
+            instances: all_generic_instances.into_iter().collect(),
+            call_sites: Vec::new(),
+            without_args,
+        }
+    }
+}
 
 /// Represents a call site in the code
 #[derive(Debug, Clone)]

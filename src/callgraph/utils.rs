@@ -5,7 +5,7 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::callgraph::{function::FunctionInstance, types::PathInfo};
 
-use super::CallGraph;
+use super::types::CallGraph;
 
 // Get version information for a specific DefId from TyCtxt
 pub(crate) fn get_crate_version<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> String {

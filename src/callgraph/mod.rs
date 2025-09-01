@@ -1,4 +1,5 @@
 mod analysis;
+mod controlflow;
 mod fmt;
 mod function;
 mod types;
@@ -7,24 +8,7 @@ mod utils;
 use analysis::perform_mono_analysis;
 use fmt::{output_call_graph_result, output_callers_result};
 use function::FunctionInstance;
-use std::collections::VecDeque;
-use types::CallSite;
-
-pub(crate) struct CallGraph<'tcx> {
-    instances: VecDeque<FunctionInstance<'tcx>>,
-    pub call_sites: Vec<CallSite<'tcx>>,
-    without_args: bool,
-}
-
-impl<'tcx> CallGraph<'tcx> {
-    fn new(all_generic_instances: Vec<FunctionInstance<'tcx>>, without_args: bool) -> Self {
-        Self {
-            instances: all_generic_instances.into_iter().collect(),
-            call_sites: Vec::new(),
-            without_args,
-        }
-    }
-}
+use types::CallGraph;
 
 // Main entry point for callgraph analysis
 pub fn analyze_crate<'tcx>(

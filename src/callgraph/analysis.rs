@@ -6,31 +6,28 @@ use rustc_middle::{
     ty::{self, Instance, TyCtxt, TypeFoldable, TypingEnv},
 };
 
-use crate::constraint_utils::{self, BlockPath};
+use super::controlflow::{self, BlockPath};
+use super::{function::FunctionInstance, types::CallGraph, types::CallSite};
 use crate::timer;
-
-use super::{function::FunctionInstance, types::CallSite, CallGraph};
 
 impl<'tcx> FunctionInstance<'tcx> {
     pub(crate) fn collect_callsites(&self, tcx: ty::TyCtxt<'tcx>) -> Vec<CallSite<'tcx>> {
         let def_id = self.def_id();
 
         if self.is_non_instance() {
-            tracing::warn!("skip non-instance function: {:?}", self);
+            tracing::warn!("Skip non-instance(No body) function: {:?}", self);
             return Vec::new();
         }
 
         if !tcx.is_mir_available(def_id) {
-            tracing::warn!("skip nobody function: {:?}", def_id);
+            tracing::warn!("Skip no-body(No mir available) function: {:?}", def_id);
             return Vec::new();
         }
 
-        // Time constraint computation
-        let constraints = timer::measure("compute_constraints", || {
-            super::analysis::get_constraints(tcx, def_id)
-        });
+        // Compute function internal constraints
+        let constraints = timer::measure("compute_constraints", || get_constraints(tcx, def_id));
 
-        // Time function call extraction
+        // Extract function call information
         timer::measure("extract_function_call", || {
             self.extract_function_call(tcx, &def_id, constraints)
         })
@@ -79,6 +76,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                 block: mir::BasicBlock,
                 data: &mir::BasicBlockData<'tcx>,
             ) {
+                // Update current basic block
                 self.current_bb = block;
                 self.super_basic_block_data(block, data);
             }
@@ -100,6 +98,8 @@ impl<'tcx> FunctionInstance<'tcx> {
                         TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
 
                     let before_mono_ty = func.ty(self.caller_body, self.tcx);
+
+                    // Perform monomorphization
                     let monod_result = monomorphize(
                         self.tcx,
                         typing_env,
@@ -231,6 +231,7 @@ pub(crate) fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<Func
     }
 }
 
+// Perform monomorphization while constructing call graph
 pub(crate) fn perform_mono_analysis<'tcx>(
     tcx: ty::TyCtxt<'tcx>,
     instances: Vec<FunctionInstance<'tcx>>,
@@ -288,10 +289,11 @@ where
     )
 }
 
+/// Get internal constraints from the body of a function
 pub(crate) fn get_constraints(
     tcx: ty::TyCtxt,
     def_id: DefId,
 ) -> HashMap<mir::BasicBlock, BlockPath> {
     let mir = tcx.optimized_mir(def_id);
-    constraint_utils::compute_shortest_paths(mir)
+    controlflow::compute_shortest_paths(mir)
 }

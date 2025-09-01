@@ -17,7 +17,6 @@ extern crate rustc_type_ir;
 
 mod args;
 mod callgraph;
-mod constraint_utils;
 mod driver;
 mod timer;
 
