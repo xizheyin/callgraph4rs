@@ -124,6 +124,7 @@ impl Timer {
     /// # Arguments
     /// * `name` - The name of the timer
     /// * `duration` - The duration to record
+    #[allow(unused)]
     pub fn record(name: &str, duration: Duration) {
         let mut timers = TIMER.timers.lock().unwrap();
         let timer = timers
@@ -184,6 +185,7 @@ impl Timer {
 
     /// Appends timer results to the configured output file
     /// If no file is configured, prints to the log instead
+    #[allow(unused)]
     pub fn append_to_file() -> Result<()> {
         let timers = TIMER.timers.lock().unwrap();
         let output_file = TIMER.output_file.lock().unwrap();
@@ -210,6 +212,7 @@ impl Timer {
     }
 
     /// Resets all timers
+    #[allow(unused)]
     pub fn reset_all() {
         let mut timers = TIMER.timers.lock().unwrap();
         timers.clear();
@@ -219,6 +222,7 @@ impl Timer {
     ///
     /// # Arguments
     /// * `name` - The name of the timer to reset
+    #[allow(unused)]
     pub fn reset(name: &str) {
         let mut timers = TIMER.timers.lock().unwrap();
         timers.remove(name);

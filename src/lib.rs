@@ -18,10 +18,8 @@ extern crate rustc_type_ir;
 mod args;
 mod callgraph;
 mod constraint_utils;
-/// the driver for perform analysis and generate report
 mod driver;
-/// timer module for measuring execution time
-pub mod timer;
+mod timer;
 
-/// driver
+// This is used in cg4rs.rs
 pub use driver::CGDriver;
