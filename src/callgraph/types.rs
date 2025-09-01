@@ -55,20 +55,7 @@ pub(crate) struct PathInfo<'tcx> {
 
 impl<'tcx> PartialOrd for PathInfo<'tcx> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let a_name = format!("{:?}", self.caller);
-        let b_name = format!("{:?}", other.caller);
-
-        match a_name.partial_cmp(&b_name) {
-            Some(std::cmp::Ordering::Equal) => {
-                match self.constraints.partial_cmp(&other.constraints) {
-                    Some(std::cmp::Ordering::Equal) => {
-                        self.package_num.partial_cmp(&other.package_num)
-                    }
-                    non_eq => non_eq,
-                }
-            }
-            non_eq => non_eq,
-        }
+        Some(self.cmp(other))
     }
 }
 
