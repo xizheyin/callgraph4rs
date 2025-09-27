@@ -241,25 +241,24 @@ pub(crate) fn perform_mono_analysis<'tcx>(
     args: &crate::args::CGArgs,
 ) -> CallGraph<'tcx> {
     let mut call_graph = CallGraph::new(instances, args.without_args);
-    let mut visited = HashSet::new();
+    let mut discovered = HashSet::new();
 
     while let Some(instance) = call_graph.instances.pop_front() {
-        if visited.contains(&instance) {
-            continue;
-        }
-        visited.insert(instance);
-
         let call_sites = timer::measure("instance_callsites", || instance.collect_callsites(tcx));
 
         for call_site in call_sites {
+            call_graph.call_sites.push(call_site.clone());
+            if discovered.contains(&call_site.callee()) {
+                continue;
+            }
+            discovered.insert(call_site.callee());
             call_graph.instances.push_back(call_site.callee());
-            call_graph.call_sites.push(call_site);
         }
     }
 
     tracing::info!(
         "Analysis complete: {} instances analyzed, {} call sites found",
-        visited.len(),
+        discovered.len(),
         call_graph.call_sites.len(),
     );
 
