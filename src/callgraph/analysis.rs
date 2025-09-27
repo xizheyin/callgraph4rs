@@ -134,9 +134,12 @@ impl<'tcx> FunctionInstance<'tcx> {
                                     match self.tcx.def_kind(def_id) {
                                         def::DefKind::Fn | def::DefKind::AssocFn => {
                                             tracing::debug!("Try resolve instance: {:?}", monod_ty);
+                                            // Use callee-specific typing environment for resolution
+                                            let callee_env =
+                                                TypingEnv::post_analysis(self.tcx, *def_id);
                                             let instance_result = ty::Instance::try_resolve(
                                                 self.tcx,
-                                                typing_env,
+                                                callee_env,
                                                 *def_id,
                                                 monoed_args,
                                             );
