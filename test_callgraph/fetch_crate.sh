@@ -11,7 +11,7 @@ fi
 
 CRATE_NAME="$1"
 CRATE_VER="$2"
-DEST_DIR="/home/nju/cg/test_callgraph"
+DEST_DIR="$(pwd)"
 TARGET_PATH="${DEST_DIR}/${CRATE_NAME}-${CRATE_VER}"
 URL="https://crates.io/api/v1/crates/${CRATE_NAME}/${CRATE_VER}/download"
 
