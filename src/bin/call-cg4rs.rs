@@ -157,10 +157,10 @@ async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::
     Ok(())
 }
 
-async fn cargo_cg4rs(args_without_no_clean: Vec<String>) -> anyhow::Result<()> {
+async fn cargo_cg4rs(args: Vec<String>) -> anyhow::Result<()> {
     // 执行cargo cg4rs命令
     let mut cg_args = vec!["cg4rs".to_string()];
-    cg_args.extend(args_without_no_clean.clone());
+    cg_args.extend(args.clone());
 
     println!("Executing: cargo {}", cg_args.join(" "));
 
