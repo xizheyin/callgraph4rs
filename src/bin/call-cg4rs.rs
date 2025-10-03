@@ -42,11 +42,6 @@ async fn args() -> Args {
             let path_str = args[i].split('=').nth(1).unwrap_or("");
             root_path = Some(PathBuf::from(path_str));
             // 不将此参数传递给cargo cg4rs
-        } else if args[i] == "--root-path" && i + 1 < args.len() {
-            // 形式: --root-path /path/to/repo
-            root_path = Some(PathBuf::from(&args[i + 1]));
-            i += 1; // 跳过下一个参数
-                    // 不将此参数传递给cargo cg4rs
         } else if args[i].starts_with("--manifest-path=") {
             // 形式: --manifest-path=/path/to/repo/Cargo.toml
             let path_str = args[i].split('=').nth(1).unwrap_or("");
