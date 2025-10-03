@@ -53,9 +53,11 @@ async fn args() -> Args {
         }
         i += 1;
     }
-    println!("manifest_path: {manifest_path:?}");
 
-    // 确定根目录，优先级：1. root_path 2. manifest_path所在目录 3. 当前目录
+    // ensure target project root directory
+    // 1. root_path
+    // 2. Directory name of manifest_path (use manifest_path when using tools)
+    // 3. current directory
     let project_root_dir = if let Some(path) = root_path {
         path
     } else if let Some(path) = &manifest_path {
@@ -64,6 +66,9 @@ async fn args() -> Args {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| env::current_dir().expect("Failed to get current directory"))
     } else {
+        eprintln!(
+            "Warning: Neither --root-path nor --manifest-path provided. Using current directory."
+        );
         env::current_dir().expect("Failed to get current directory")
     };
 
