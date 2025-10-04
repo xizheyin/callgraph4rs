@@ -10,17 +10,19 @@ use tokio::time::timeout;
 async fn main() {
     tracing_subscriber::fmt::init();
     tracing::trace!("run cg4rs");
-    
+
     // 设置 5 分钟超时
     let timeout_duration = Duration::from_secs(5 * 60); // 5 分钟
-    
+
     let result = timeout(timeout_duration, async {
         // 在异步任务中运行 rustc_main
         tokio::task::spawn_blocking(|| {
             rustc_main(CGDriver);
-        }).await
-    }).await;
-    
+        })
+        .await
+    })
+    .await;
+
     match result {
         Ok(Ok(())) => {
             tracing::info!("cg4rs completed successfully");
