@@ -388,22 +388,20 @@ pub(crate) fn candidates_for_fnptr_sig<'tcx>(
                     sig_output,
                 );
 
-                if return_types_match {
-                    let cand_inputs = candidate_sig.inputs().skip_binder();
-                    let inputs_match =
-                        cand_inputs
-                            .iter()
-                            .zip(sig_inputs.iter())
-                            .all(|(cand_input, sig_input)| {
-                                types_match_ignoring_regions(tcx, *cand_input, *sig_input)
-                            });
+                let inputs_match = candidate_sig
+                    .inputs()
+                    .skip_binder()
+                    .iter()
+                    .zip(sig_inputs.iter())
+                    .all(|(cand_input, sig_input)| {
+                        types_match_ignoring_regions(tcx, *cand_input, *sig_input)
+                    });
 
-                    if inputs_match {
-                        if let Some(instance) = trivial_resolve(tcx, *fn_def_id) {
-                            candidates.push(instance);
-                        } else {
-                            candidates.push(FunctionInstance::new_non_instance(*fn_def_id));
-                        }
+                if return_types_match && inputs_match {
+                    if let Some(instance) = trivial_resolve(tcx, *fn_def_id) {
+                        candidates.push(instance);
+                    } else {
+                        candidates.push(FunctionInstance::new_non_instance(*fn_def_id));
                     }
                 }
             }
