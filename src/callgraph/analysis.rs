@@ -3,8 +3,12 @@ use std::collections::{HashMap, HashSet};
 use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
-    ty::{self, Instance, TyCtxt, TypeFoldable, TypingEnv},
+    ty::{
+        self, normalize_erasing_regions::NormalizationError, Instance, TyCtxt, TypeFoldable,
+        TypingEnv,
+    },
 };
+use tracing::{debug, error, info, warn};
 
 use super::controlflow::{self, BlockPath};
 use super::{function::FunctionInstance, types::CallGraph, types::CallSite};
@@ -68,6 +72,138 @@ impl<'tcx> FunctionInstance<'tcx> {
                     current_bb: mir::BasicBlock::from_usize(0),
                 }
             }
+
+            /// Deal with normalize error
+            ///
+            /// If the function is a constant function, return the non-instance function.
+            /// Otherwise, return None.
+            fn handle_mono_error(
+                &self,
+                func: &mir::Operand<'tcx>,
+                before_mono_ty: ty::Ty<'tcx>,
+                err: NormalizationError,
+            ) -> Option<FunctionInstance<'tcx>> {
+                use mir::Operand::*;
+                tracing::warn!("Monomorphization failed: {:?}", err);
+                match func {
+                    Constant(_) => match before_mono_ty.kind() {
+                        // Although the monomorphization failed, the function is a constant function
+                        // So we can use DefId to construct non-instance function
+                        ty::TyKind::FnDef(def_id, _) => {
+                            tracing::warn!(
+                                "Callee {:?} is not monomorphized, using non-instance",
+                                def_id
+                            );
+                            Some(FunctionInstance::new_non_instance(*def_id))
+                        }
+                        _ => None,
+                    },
+                    Move(_) | Copy(_) => {
+                        tracing::warn!("skip move or copy: {:?}", before_mono_ty);
+                        None
+                    }
+                }
+            }
+
+            /// Handle monomorphized callee
+            fn handle_monoed_callee(
+                &mut self,
+                func: &mir::Operand<'tcx>,
+                monod_ty: ty::Ty<'tcx>,
+            ) -> Option<FunctionInstance<'tcx>> {
+                use mir::Operand::*;
+                match func {
+                    Constant(_) => self.handle_monoed_direct_callee(monod_ty),
+                    // Move or copy operands - 支持函数指针调用
+                    Move(_) | Copy(_) => self.handle_monoed_indirect_callee(monod_ty),
+                }
+            }
+
+            /// Handle monomorphized direct callee
+            fn handle_monoed_direct_callee(
+                &mut self,
+                monod: ty::Ty<'tcx>,
+            ) -> Option<FunctionInstance<'tcx>> {
+                if let ty::TyKind::FnDef(def_id, monoed_args) = monod.kind() {
+                    // FnDef represents a direct function call
+                    // such as `let x = func(y);`
+                    match self.tcx.def_kind(def_id) {
+                        // bare function, method, associated function
+                        def::DefKind::Fn | def::DefKind::AssocFn => {
+                            debug!("Try resolve instance: {:?}", monod);
+                            let instance_result = ty::Instance::try_resolve(
+                                self.tcx,
+                                TypingEnv::post_analysis(self.tcx, *def_id), // Use callee-specific typing environment for resolution
+                                *def_id,
+                                monoed_args,
+                            );
+
+                            match instance_result {
+                                Err(err) => {
+                                    error!("Instance [{:?}] resolve failed: {:?}", monod, err)
+                                }
+                                Ok(opt_instance) => {
+                                    if let Some(instance) = opt_instance {
+                                        info!("Resolved instance successfully: {:?}", instance);
+                                        return Some(FunctionInstance::new_instance(instance));
+                                    } else {
+                                        warn!("Resolve [{:#?}] failed, trivial resolve", monod);
+                                        return trivial_resolve(self.tcx, *def_id).or_else(|| {
+                                                            warn!("Trivial resolve [{:?}] also failed, using non-instance", def_id);
+                                                            Some(FunctionInstance::new_non_instance(*def_id))
+                                                        });
+                                    }
+                                }
+                            }
+                        }
+                        other => error!("unknown callee type: {:?}", other),
+                    }
+                } else {
+                    error!("unexpected function type: {:?}", monod.kind());
+                }
+                None
+            }
+
+            /// Handle monomorphized indirect callee
+            ///
+            /// When Operand is Move/Copy, the callee is a function pointer
+            /// We need to resolve the function pointer to get the actual callee
+            fn handle_monoed_indirect_callee(
+                &mut self,
+                monod_ty: ty::Ty<'tcx>,
+            ) -> Option<FunctionInstance<'tcx>> {
+                match monod_ty.kind() {
+                    ty::TyKind::FnPtr(poly_sig, _) => {
+                        let sig = poly_sig.skip_binder();
+                        let candidates = candidates_for_fnptr_sig(self.tcx, sig);
+                        if candidates.is_empty() {
+                            tracing::warn!(
+                                "fnptr call: no candidates found for signature {:?}",
+                                poly_sig
+                            );
+                        } else {
+                            tracing::info!(
+                                "fnptr call: found {} signature-matched candidates",
+                                candidates.len()
+                            );
+                            for cand in candidates {
+                                self.callees.push(CallSite::new(
+                                    *self.caller_instance,
+                                    cand,
+                                    self.constraints[&self.current_bb].constraints,
+                                ));
+                            }
+                        }
+                        // We have already inserted the candidates into the call list
+                        // So we just return None here
+                        None
+                    }
+                    _ => {
+                        tracing::warn!("skip move or copy (unsupported type): {:?}", monod_ty);
+                        None
+                    }
+                }
+            }
         }
 
         impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
@@ -93,7 +229,6 @@ impl<'tcx> FunctionInstance<'tcx> {
                         func.ty(self.caller_body, self.tcx)
                     );
 
-                    use mir::Operand::*;
                     let typing_env =
                         TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
 
@@ -107,97 +242,9 @@ impl<'tcx> FunctionInstance<'tcx> {
                         before_mono_ty,
                     );
 
-                    let callee = if let Err(err) = monod_result {
-                        tracing::warn!("Monomorphization failed: {:?}", err);
-                        match func {
-                            Constant(_) => match before_mono_ty.kind() {
-                                ty::TyKind::FnDef(def_id, _) => {
-                                    tracing::warn!(
-                                        "Callee {:?} is not monomorphized, using non-instance",
-                                        def_id
-                                    );
-                                    Some(FunctionInstance::new_non_instance(*def_id))
-                                }
-                                _ => None,
-                            },
-                            Move(_) | Copy(_) => {
-                                tracing::warn!("skip move or copy: {:?}", func);
-                                None
-                            }
-                        }
-                    } else {
-                        let monod_ty = monod_result.unwrap();
-
-                        match func {
-                            Constant(_) => match monod_ty.kind() {
-                                ty::TyKind::FnDef(def_id, monoed_args) => {
-                                    match self.tcx.def_kind(def_id) {
-                                        def::DefKind::Fn | def::DefKind::AssocFn => {
-                                            tracing::debug!("Try resolve instance: {:?}", monod_ty);
-                                            // Use callee-specific typing environment for resolution
-                                            let callee_env =
-                                                TypingEnv::post_analysis(self.tcx, *def_id);
-                                            let instance_result = ty::Instance::try_resolve(
-                                                self.tcx,
-                                                callee_env,
-                                                *def_id,
-                                                monoed_args,
-                                            );
-
-                                            match instance_result {
-                                                Err(err) => {
-                                                    tracing::error!(
-                                                        "Instance [{:?}] resolution error: {:?}",
-                                                        monod_ty,
-                                                        err
-                                                    );
-                                                    None
-                                                }
-                                                Ok(opt_instance) => {
-                                                    if let Some(instance) = opt_instance {
-                                                        tracing::info!(
-                                                            "Resolved instance successfully: {:?}",
-                                                            instance
-                                                        );
-                                                        Some(FunctionInstance::new_instance(
-                                                            instance,
-                                                        ))
-                                                    } else {
-                                                        tracing::warn!(
-                                                            "Resolve [{:#?}] failed, try trivial resolve",
-                                                            monod_ty
-                                                        );
-                                                        trivial_resolve(self.tcx, *def_id).or_else(|| {
-                                                            tracing::warn!("Trivial resolve [{:?}] also failed, using non-instance", def_id);
-                                                            Some(FunctionInstance::new_non_instance(*def_id))
-                                                        })
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        other => {
-                                            tracing::error!(
-                                                "internal error: unknown call type: {:?}",
-                                                other
-                                            );
-                                            None
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    tracing::error!(
-                                        "internal error: unexpected function type: {:?}",
-                                        monod_ty
-                                    );
-                                    None
-                                }
-                            },
-                            // Move or copy operands
-                            Move(_) | Copy(_) => {
-                                tracing::warn!("skip move or copy: {:?}", func);
-                                None
-                            }
-                        }
+                    let callee = match monod_result {
+                        Ok(monoed) => self.handle_monoed_callee(func, monoed),
+                        Err(err) => self.handle_mono_error(func, before_mono_ty, err),
                     };
 
                     // If callee function is found, add to the call list
@@ -219,6 +266,13 @@ impl<'tcx> FunctionInstance<'tcx> {
     }
 }
 
+/// Trivial resolve function instance from def_id
+///
+/// This function is used to resolve function instance from def_id
+/// without monomorphization.
+///
+/// # Returns
+/// * `Option<FunctionInstance<'_>>` - FunctionInstance if resolved, None otherwise
 pub(crate) fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<FunctionInstance<'_>> {
     let ty = tcx.type_of(def_id).skip_binder();
     if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
@@ -298,4 +352,68 @@ pub(crate) fn get_constraints(
 ) -> HashMap<mir::BasicBlock, BlockPath> {
     let mir = tcx.optimized_mir(def_id);
     controlflow::compute_shortest_paths(mir)
+}
+
+/// Find function candidates that match the given function pointer signature
+pub(crate) fn candidates_for_fnptr_sig<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    sig: ty::FnSigTys<TyCtxt<'tcx>>,
+) -> Vec<FunctionInstance<'tcx>> {
+    fn types_match_ignoring_regions<'tcx>(
+        tcx: TyCtxt<'tcx>,
+        a: ty::Ty<'tcx>,
+        b: ty::Ty<'tcx>,
+    ) -> bool {
+        // 擦除 regions 后比较类型
+        let a_erased = tcx.erase_regions(a);
+        let b_erased = tcx.erase_regions(b);
+        a_erased == b_erased
+    }
+
+    // Cache borrowed inputs/output once to avoid accidental moves
+    let sig_inputs = sig.inputs();
+    let sig_output = sig.output();
+
+    let mut candidates = Vec::new();
+
+    for owner_def_id in tcx.hir_body_owners() {
+        let ty = tcx.type_of(owner_def_id).skip_binder();
+        if let ty::TyKind::FnDef(fn_def_id, _args) = ty.kind() {
+            let candidate_sig = tcx.fn_sig(*fn_def_id).skip_binder();
+
+            if candidate_sig.inputs().skip_binder().len() == sig_inputs.len() {
+                let return_types_match = types_match_ignoring_regions(
+                    tcx,
+                    candidate_sig.output().skip_binder(),
+                    sig_output,
+                );
+
+                if return_types_match {
+                    let cand_inputs = candidate_sig.inputs().skip_binder();
+                    let inputs_match =
+                        cand_inputs
+                            .iter()
+                            .zip(sig_inputs.iter())
+                            .all(|(cand_input, sig_input)| {
+                                types_match_ignoring_regions(tcx, *cand_input, *sig_input)
+                            });
+
+                    if inputs_match {
+                        if let Some(instance) = trivial_resolve(tcx, *fn_def_id) {
+                            candidates.push(instance);
+                        } else {
+                            candidates.push(FunctionInstance::new_non_instance(*fn_def_id));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::debug!(
+        "Found {} candidates for fnptr signature with {} inputs",
+        candidates.len(),
+        sig_inputs.len()
+    );
+    candidates
 }
