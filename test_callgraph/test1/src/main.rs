@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::rc::Rc;
 
+mod dyn_example;
+
 // 通用特征 - 产品接口
 trait Product: Debug {
     fn name(&self) -> &str;
@@ -377,4 +379,7 @@ fn main() {
             product.discount() * 100.0
         );
     }
+
+    println!("\n=== 运行动态分派示例 ===");
+    dyn_example::main();
 }
