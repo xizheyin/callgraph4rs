@@ -12,7 +12,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir --cap-lints allow");
+    unsafe {
+        std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir --cap-lints allow");
+    }
 
     // 获取命令行参数
     let Args {
@@ -41,7 +43,7 @@ async fn args() -> Args {
             // 形式: --root-path /path/to/repo
             root_path = Some(PathBuf::from(&args[i + 1]));
             i += 1; // 跳过下一个参数
-                    // 不将此参数传递给cargo cg4rs
+        // 不将此参数传递给cargo cg4rs
         } else if args[i] == "--manifest-path" && i + 1 < args.len() {
             // 形式: --manifest-path /path/to/repo/Cargo.toml
             manifest_path = Some(PathBuf::from(&args[i + 1]));
