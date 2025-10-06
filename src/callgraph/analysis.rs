@@ -1,20 +1,23 @@
-use std::collections::{HashMap, HashSet};
+use super::{
+    controlflow::{self, BlockPath},
+    function::{FunctionInstance, iterate_all_functions},
+    types::{CallGraph, CallSite},
+};
+use crate::{callgraph::utils::is_dyn_trait_type, timer};
 
 use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind},
     ty::{
-        self, normalize_erasing_regions::NormalizationError, Instance, TyCtxt, TypeFoldable,
-        TypingEnv,
+        self, Instance, TyCtxt, TypeFoldable, TypingEnv,
+        normalize_erasing_regions::NormalizationError,
     },
 };
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, info, warn};
 
-use super::controlflow::{self, BlockPath};
-use super::{function::FunctionInstance, types::CallGraph, types::CallSite};
-use crate::timer;
-
 impl<'tcx> FunctionInstance<'tcx> {
+    /// the entrypoint to collect all callsites in a function instance
     pub(crate) fn collect_callsites(&self, tcx: ty::TyCtxt<'tcx>) -> Vec<CallSite<'tcx>> {
         let def_id = self.def_id();
 
@@ -28,7 +31,8 @@ impl<'tcx> FunctionInstance<'tcx> {
             return Vec::new();
         }
 
-        // Compute function internal constraints
+        // Compute function internal constraints,
+        // which is a mapping from basic block to the path from the entry block to the basic block.
         let constraints = timer::measure("compute_constraints", || get_constraints(tcx, def_id));
 
         // Extract function call information
@@ -125,15 +129,29 @@ impl<'tcx> FunctionInstance<'tcx> {
                 monod: ty::Ty<'tcx>,
             ) -> Option<FunctionInstance<'tcx>> {
                 if let ty::TyKind::FnDef(def_id, monoed_args) = monod.kind() {
-                    // FnDef represents a direct function call
-                    // such as `let x = func(y);`
+                    let callee_defkind = self.tcx.def_kind(def_id);
+                    info!("Found direct call {:?}, kind: {:?}", monod, callee_defkind);
+
+                    if matches!(callee_defkind, def::DefKind::AssocFn) {
+                        // check if the first parameter is a dyn trait
+                        if !monoed_args.is_empty()
+                            && let Some(first_param) = monoed_args[0].as_type()
+                            && is_dyn_trait_type(first_param)
+                        {
+                            info!("Found trait method call with dyn self: {:?}", monod);
+                            return self.handle_dyn_trait_method_call(*def_id, first_param);
+                        }
+                    }
+
                     match self.tcx.def_kind(def_id) {
                         // bare function, method, associated function
                         def::DefKind::Fn | def::DefKind::AssocFn => {
                             debug!("Try resolve instance: {:?}", monod);
+                            // use caller's context to create TypingEnv, not callee's
+                            let caller_def_id = self.caller_instance.def_id();
                             let instance_result = ty::Instance::try_resolve(
                                 self.tcx,
-                                TypingEnv::post_analysis(self.tcx, *def_id), // Use callee-specific typing environment for resolution
+                                TypingEnv::post_analysis(self.tcx, caller_def_id), // Use caller's typing environment for resolution
                                 *def_id,
                                 monoed_args,
                             );
@@ -159,7 +177,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                         other => error!("unknown callee type: {:?}", other),
                     }
                 } else {
-                    error!("unexpected function type: {:?}", monod.kind());
+                    error!("unexpected function type: {:#?}", monod.kind());
                 }
                 None
             }
@@ -195,62 +213,59 @@ impl<'tcx> FunctionInstance<'tcx> {
                             }
                         }
                     }
-                    // 新增：支持 dyn trait 对象的动态分派
-                    ty::TyKind::Dynamic(_, _, _) => {
-                        if let Some((trait_id, method_name, inputs, output)) =
-                            extract_dyn_trait_info(self.tcx, monod_ty)
-                        {
-                            let candidates = candidates_for_dyn_trait(
-                                self.tcx,
-                                trait_id,
-                                &method_name,
-                                &inputs,
-                                output,
-                            );
-                            if candidates.is_empty() {
-                                tracing::warn!(
-                                    "dyn call: no candidates found for trait {} method {} with inputs={:?}, output={:?}",
-                                    self.tcx.def_path_str(trait_id), method_name, inputs, output
-                                );
-                            } else {
-                                tracing::info!(
-                                    "dyn call: found {} candidates for trait {} method {}",
-                                    candidates.len(),
-                                    self.tcx.def_path_str(trait_id),
-                                    method_name
-                                );
-                                for cand in candidates {
-                                    self.callees.push(CallSite::new(
-                                        *self.caller_instance,
-                                        cand,
-                                        self.constraints[&self.current_bb].constraints,
-                                    ));
-                                }
-                            }
-                        } else {
-                            tracing::warn!(
-                                "dyn call: failed to extract trait info: {:?}",
-                                monod_ty
-                            );
-                        }
-                    }
-                    // Support &dyn T / *const dyn T / Box<dyn T> / Rc<dyn T> / Arc<dyn T>
-                    ty::TyKind::Ref(_, inner, _) | ty::TyKind::RawPtr(inner, ..) => {
-                        // This is for &dyn T / *const dyn T
-                        return self.handle_monoed_indirect_callee(*inner);
-                    }
-                    ty::TyKind::Adt(adt, args) => {
-                        // This is for Box<dyn T> / Rc<dyn T> / Arc<dyn T>
-                        if is_box_like(self.tcx, adt.did()) {
-                            let inner = args.type_at(0);
-                            return self.handle_monoed_indirect_callee(inner);
-                        }
-                        tracing::warn!("skip move or copy (unsupported ADT type): {:?}", monod_ty);
-                    }
                     _ => {
                         tracing::warn!("skip move or copy (unsupported type): {:?}", monod_ty);
                     }
                 }
+                None
+            }
+
+            /// Handle dyn trait method call
+            ///
+            /// def_id is the def id of the trait method call.
+            /// dyn_trait_ty is the dyn trait type, which is TyKind::Dynamic.
+            fn handle_dyn_trait_method_call(
+                &mut self,
+                def_id: DefId,
+                dyn_trait_ty: ty::Ty<'tcx>,
+            ) -> Option<FunctionInstance<'tcx>> {
+                info!(
+                    "Processing dyn trait method call: def_id={:?}, dyn_trait_ty={:?}",
+                    def_id, dyn_trait_ty
+                );
+
+                // 提取 trait 信息
+                if let Some((trait_def_id, method_name, inputs, output)) =
+                    extract_dyn_trait_info(self.tcx, dyn_trait_ty, def_id)
+                {
+                    info!(
+                        "Found dyn trait method: trait={:?}, method={}",
+                        trait_def_id, method_name
+                    );
+
+                    // 查找候选实现
+                    let candidates = candidates_for_dyn_trait(
+                        self.tcx,
+                        trait_def_id,
+                        &method_name,
+                        &inputs,
+                        output,
+                    );
+                    info!("Found {} candidates for dyn trait method", candidates.len());
+
+                    for cand in candidates {
+                        self.callees.push(CallSite::new(
+                            *self.caller_instance,
+                            cand,
+                            self.constraints[&self.current_bb].constraints,
+                        ));
+                    }
+                }
+
+                // 如果无法处理为动态分派，回退到普通处理
+                warn!(
+                    "Failed to handle as dyn trait method call, falling back to normal resolution"
+                );
                 None
             }
         }
@@ -404,6 +419,7 @@ pub(crate) fn get_constraints(
 }
 
 /// Find function candidates that match the given function pointer signature
+/// FIXME: needs further optimization
 pub(crate) fn candidates_for_fnptr_sig<'tcx>(
     tcx: TyCtxt<'tcx>,
     sig: ty::FnSigTys<TyCtxt<'tcx>>,
@@ -423,39 +439,41 @@ pub(crate) fn candidates_for_fnptr_sig<'tcx>(
     let sig_inputs = sig.inputs();
     let sig_output = sig.output();
 
-    let mut candidates = Vec::new();
+    // 使用抽象函数遍历所有 crate 中的函数
+    let candidates = iterate_all_functions(
+        tcx,
+        |def_id| {
+            let candidate_sig = tcx.fn_sig(def_id).skip_binder();
 
-    for owner_def_id in tcx.hir_body_owners() {
-        let ty = tcx.type_of(owner_def_id).skip_binder();
-        if let ty::TyKind::FnDef(fn_def_id, _args) = ty.kind() {
-            let candidate_sig = tcx.fn_sig(*fn_def_id).skip_binder();
-
-            if candidate_sig.inputs().skip_binder().len() == sig_inputs.len() {
-                let return_types_match = types_match_ignoring_regions(
-                    tcx,
-                    candidate_sig.output().skip_binder(),
-                    sig_output,
-                );
-
-                let inputs_match = candidate_sig
-                    .inputs()
-                    .skip_binder()
-                    .iter()
-                    .zip(sig_inputs.iter())
-                    .all(|(cand_input, sig_input)| {
-                        types_match_ignoring_regions(tcx, *cand_input, *sig_input)
-                    });
-
-                if return_types_match && inputs_match {
-                    if let Some(instance) = trivial_resolve(tcx, *fn_def_id) {
-                        candidates.push(instance);
-                    } else {
-                        candidates.push(FunctionInstance::new_non_instance(*fn_def_id));
-                    }
-                }
+            // 检查参数数量是否匹配
+            if candidate_sig.inputs().skip_binder().len() != sig_inputs.len() {
+                return false;
             }
-        }
-    }
+
+            // 检查返回类型是否匹配
+            let return_types_match =
+                types_match_ignoring_regions(tcx, candidate_sig.output().skip_binder(), sig_output);
+
+            // 检查输入类型是否匹配
+            let inputs_match = candidate_sig
+                .inputs()
+                .skip_binder()
+                .iter()
+                .zip(sig_inputs.iter())
+                .all(|(cand_input, sig_input)| {
+                    types_match_ignoring_regions(tcx, *cand_input, *sig_input)
+                });
+
+            return_types_match && inputs_match
+        },
+        |def_id| {
+            if let Some(instance) = trivial_resolve(tcx, def_id) {
+                Some(instance)
+            } else {
+                Some(FunctionInstance::new_non_instance(def_id))
+            }
+        },
+    );
 
     tracing::debug!(
         "Found {} candidates for fnptr signature with {} inputs",
@@ -465,16 +483,11 @@ pub(crate) fn candidates_for_fnptr_sig<'tcx>(
     candidates
 }
 
-// 辅助：判断常见 box-like 智能指针 (Box / Rc / Arc)
-fn is_box_like(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    let name = tcx.def_path_str(def_id);
-    name.ends_with("Box") || name.ends_with("Rc") || name.ends_with("Arc")
-}
-
 // 辅助：从 dyn Trait 类型中提取完整的 trait 信息
 fn extract_dyn_trait_info<'tcx>(
     tcx: TyCtxt<'tcx>,
     dyn_ty: ty::Ty<'tcx>,
+    method_def_id: DefId,
 ) -> Option<(DefId, String, Vec<ty::Ty<'tcx>>, ty::Ty<'tcx>)> {
     let (preds, _reg, _repr) = match dyn_ty.kind() {
         ty::TyKind::Dynamic(preds, reg, repr) => (preds, reg, repr),
@@ -497,7 +510,7 @@ fn extract_dyn_trait_info<'tcx>(
             ty::ExistentialPredicate::Trait(tr) => {
                 // 检查是否是 Fn/FnMut/FnOnce trait
                 if let Some(fn_id) = fn_trait {
-                    if tr.def_id == fn_id {
+                    if tr.def_id == fn_id && tr.args.len() > 1 {
                         trait_def_id = Some(fn_id);
                         method_name = Some("call".to_string());
                         let args_tuple = tr.args.type_at(1);
@@ -505,7 +518,7 @@ fn extract_dyn_trait_info<'tcx>(
                     }
                 }
                 if let Some(fn_mut_id) = fn_mut_trait {
-                    if tr.def_id == fn_mut_id {
+                    if tr.def_id == fn_mut_id && tr.args.len() > 1 {
                         trait_def_id = Some(fn_mut_id);
                         method_name = Some("call_mut".to_string());
                         let args_tuple = tr.args.type_at(1);
@@ -513,7 +526,7 @@ fn extract_dyn_trait_info<'tcx>(
                     }
                 }
                 if let Some(fn_once_id) = fn_once_trait {
-                    if tr.def_id == fn_once_id {
+                    if tr.def_id == fn_once_id && tr.args.len() > 1 {
                         trait_def_id = Some(fn_once_id);
                         method_name = Some("call_once".to_string());
                         let args_tuple = tr.args.type_at(1);
@@ -522,12 +535,12 @@ fn extract_dyn_trait_info<'tcx>(
                 }
 
                 // 如果不是 Fn trait，则是普通的 trait
-                // 对于普通 trait，我们只能获取 trait_def_id，方法名需要从调用上下文推断
+                // 对于普通 trait，我们可以从 method_def_id 获取真正的方法名
                 if trait_def_id.is_none() {
                     trait_def_id = Some(tr.def_id);
-                    // 对于普通 trait，我们暂时无法确定具体的方法名
-                    // 这需要从 MIR 调用指令中获取更多信息
-                    method_name = Some("unknown_method".to_string());
+                    // 从 method_def_id 获取方法名
+                    let method_name_str = tcx.item_name(method_def_id).to_string();
+                    method_name = Some(method_name_str);
                 }
             }
             ty::ExistentialPredicate::Projection(pr) => {
@@ -557,6 +570,7 @@ fn extract_dyn_trait_info<'tcx>(
     Some((trait_id, method, vec![], tcx.types.unit))
 }
 
+// FIXME: needs further optimization
 // 为 dyn trait 查找候选函数
 fn candidates_for_dyn_trait<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -570,32 +584,39 @@ fn candidates_for_dyn_trait<'tcx>(
     let fn_trait = li.fn_trait();
     let fn_mut_trait = li.fn_mut_trait();
     let fn_once_trait = li.fn_once_trait();
-    
-    if Some(trait_id) == fn_trait || Some(trait_id) == fn_mut_trait || Some(trait_id) == fn_once_trait {
+
+    // if trait is Fn/FnMut/FnOnce, use signature matching
+    if Some(trait_id) == fn_trait
+        || Some(trait_id) == fn_mut_trait
+        || Some(trait_id) == fn_once_trait
+    {
         return candidates_for_dyn_fn_sig(tcx, inputs, output);
     }
-    
-    // 对于普通 trait，暂时使用简化的实现
-    // 这里我们遍历所有函数，检查它们是否实现了该 trait
+
+    // 对于普通 trait，查找所有实现了该 trait 的类型的方法
     let mut candidates = Vec::new();
-    
-    // 简化版本：遍历所有函数，暂时不做 trait 实现检查
-    // 在实际使用中，这会产生一些误报，但至少能工作
-    for owner_def_id in tcx.hir_body_owners() {
-        let ty = tcx.type_of(owner_def_id).skip_binder();
-        if let ty::TyKind::FnDef(fn_def_id, _args) = ty.kind() {
-            // 简单的名称匹配（这是一个简化的实现）
-            let fn_name = tcx.def_path_str(*fn_def_id);
-            if method_name == "unknown_method" || fn_name.contains(method_name) {
-                if let Some(instance) = trivial_resolve(tcx, *fn_def_id) {
+
+    // 遍历所有实现了该 trait 的类型
+    let all_impls = tcx.all_impls(trait_id);
+    for impl_def_id in all_impls {
+        // 查找该实现中的指定方法
+        for &item_def_id in tcx.associated_item_def_ids(impl_def_id) {
+            let item = tcx.associated_item(item_def_id);
+
+            // 检查是否是我们要找的方法
+            if item.name().to_string() == method_name
+                && matches!(item.kind, ty::AssocKind::Fn { .. })
+            {
+                // 尝试解析实例
+                if let Some(instance) = trivial_resolve(tcx, item_def_id) {
                     candidates.push(instance);
                 } else {
-                    candidates.push(FunctionInstance::new_non_instance(*fn_def_id));
+                    candidates.push(FunctionInstance::new_non_instance(item_def_id));
                 }
             }
         }
     }
-    
+
     tracing::debug!(
         "Found {} candidates for dyn trait {} method {} (simplified implementation)",
         candidates.len(),
@@ -605,7 +626,7 @@ fn candidates_for_dyn_trait<'tcx>(
     candidates
 }
 
-// 基于 (inputs, output) 收集候选函数
+// FIXME: needs further optimization
 fn candidates_for_dyn_fn_sig<'tcx>(
     tcx: TyCtxt<'tcx>,
     inputs: &[ty::Ty<'tcx>],

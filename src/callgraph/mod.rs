@@ -17,8 +17,8 @@ pub fn analyze_crate<'tcx>(
 ) -> CallGraph<'tcx> {
     // Collect all generic instances in the crate
     let instances: Vec<FunctionInstance<'tcx>> =
-        crate::timer::measure("collect_generic_instances", || {
-            function::collect_generic_instances(tcx)
+        crate::timer::measure("collect_local_instances", || {
+            function::collect_local_instances(tcx)
         });
 
     // Perform monomorphization analysis

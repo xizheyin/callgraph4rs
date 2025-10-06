@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self, TyCtxt};
 
 use crate::callgraph::{function::FunctionInstance, types::PathInfo};
 
@@ -274,4 +274,8 @@ impl<'tcx> CallGraph<'tcx> {
             }
         })
     }
+}
+
+pub(crate) fn is_dyn_trait_type(ty: ty::Ty<'_>) -> bool {
+    matches!(ty.kind(), ty::TyKind::Dynamic(..))
 }
