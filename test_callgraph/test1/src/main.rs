@@ -4,6 +4,10 @@ use std::fmt::Debug;
 use std::rc::Rc;
 
 mod dyn_example;
+mod external_trait_example;
+mod manual_serde;
+mod ultra_simple_serde;
+// mod serde_import_only;
 
 // 通用特征 - 产品接口
 trait Product: Debug {
@@ -380,6 +384,15 @@ fn main() {
         );
     }
 
-    println!("\n=== 运行动态分派示例 ===");
+    println!("\n=== 运行外部crate trait动态调用示例 ===");
     dyn_example::main();
+
+    println!("\n=== 外部crate trait动态调用示例 ===");
+    external_trait_example::main();
+
+    println!("\n=== 极简serde示例 (v1.0.100) ===");
+    ultra_simple_serde::main();
+
+    println!("\n=== 手动实现serde示例 (v1.0.100) ===");
+    manual_serde::main();
 }
