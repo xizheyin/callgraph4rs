@@ -1,5 +1,8 @@
-use rustc_hir::def_id::{DefId, LOCAL_CRATE};
-use rustc_middle::ty::{self, TyCtxt, TypingEnv};
+use rustc_hir::def_id::DefId;
+use rustc_middle::{
+    middle::exported_symbols::ExportedSymbol,
+    ty::{self, TyCtxt, TypingEnv},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FunctionInstance<'tcx> {
@@ -78,26 +81,46 @@ where
     P: FnMut(DefId) -> Option<FunctionInstance<'tcx>>,
 {
     let mut results = Vec::new();
-    // all crates, including local crate
-    let all_crates = tcx.crates(()).iter().chain(std::iter::once(&LOCAL_CRATE));
-    for &crate_num in all_crates {
-        let root = crate_num.as_def_id(); // root def id of the crate
-        let mut queue = std::collections::VecDeque::new();
-        let mut seen = std::collections::HashSet::new();
-        queue.push_back(root);
 
-        while let Some(mod_id) = queue.pop_front() {
-            if !seen.insert(mod_id) {
-                continue;
-            }
-            for child in tcx.module_children(mod_id) {
-                if let Some(def_id) = child.res.opt_def_id() {
-                    use rustc_hir::def;
-                    match tcx.def_kind(def_id) {
-                        def::DefKind::Mod => {
-                            queue.push_back(def_id);
+    // Get def_id from ExportedSymbol
+    let get_def_id = |sym: &ExportedSymbol| -> Option<DefId> {
+        match sym {
+            ExportedSymbol::NonGeneric(def_id) => Some(*def_id),
+            ExportedSymbol::Generic(def_id, _) => Some(*def_id),
+            ExportedSymbol::ThreadLocalShim(def_id) => Some(*def_id),
+            ExportedSymbol::AsyncDropGlue(def_id, _) => Some(*def_id),
+            _ => None,
+        }
+    };
+
+    // 遍历本地 crate：通过 HIR body owners 筛选函数与关联函数
+    {
+        use rustc_hir::def::DefKind;
+        for owner in tcx.hir_body_owners() {
+            let def_id = owner.to_def_id();
+            match tcx.def_kind(def_id) {
+                DefKind::Fn | DefKind::AssocFn => {
+                    if filter(def_id) {
+                        if let Some(instance) = processor(def_id) {
+                            results.push(instance);
                         }
-                        def::DefKind::Fn | def::DefKind::AssocFn => {
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 遍历外部 crates：使用 exported_symbols 获取可导出的函数/关联函数
+    {
+        use rustc_hir::def::DefKind;
+        for &crate_num in tcx.crates(()) {
+            let mut exported_symbols = tcx.exported_generic_symbols(crate_num).to_vec();
+            exported_symbols.extend_from_slice(tcx.exported_non_generic_symbols(crate_num));
+            for &(sym, _export) in &exported_symbols {
+                if let Some(def_id) = get_def_id(&sym) {
+                    match tcx.def_kind(def_id) {
+                        DefKind::Fn | DefKind::AssocFn => {
                             if filter(def_id) {
                                 if let Some(instance) = processor(def_id) {
                                     results.push(instance);
@@ -110,5 +133,6 @@ where
             }
         }
     }
+
     results
 }
