@@ -12,10 +12,6 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    unsafe {
-        std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir --cap-lints allow");
-    }
-
     // 获取命令行参数
     let Args {
         skip_clean,
@@ -24,8 +20,9 @@ async fn main() -> anyhow::Result<()> {
         args_without_no_clean,
     } = args().await;
 
-    copy_toolchain_file(&project_root_dir).await?;
+    copy_toolchain_file(&project_root_dir).await.unwrap();
     cargo_clean(skip_clean, manifest_path.as_deref()).await?;
+
     cargo_cg4rs(args_without_no_clean).await?;
     Ok(())
 }
@@ -166,6 +163,9 @@ async fn cargo_cg4rs(args: Vec<String>) -> anyhow::Result<()> {
 
     println!("Executing: cargo {}", cg_args.join(" "));
 
+    unsafe {
+        std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir --cap-lints allow");
+    }
     // 一次性传递所有参数，使用 tokio 异步执行
     let mut child = Command::new("cargo")
         .args(cg_args)
