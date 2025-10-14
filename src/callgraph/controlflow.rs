@@ -1,6 +1,10 @@
 //! Utilities for analyzing MIR control flow.
 
-use rustc_middle::mir::{self, BasicBlock, Body, TerminatorKind};
+use rustc_hir::def_id::DefId;
+use rustc_middle::{
+    mir::{self, BasicBlock, TerminatorKind},
+    ty::TyCtxt,
+};
 use std::collections::{HashMap, VecDeque};
 
 /// Types of constraints that can appear in MIR
@@ -69,7 +73,8 @@ impl BlockPath {
 ///
 /// # Returns
 /// * A map from each basic block to its shortest path from the entry block
-pub fn compute_shortest_paths(body: &Body<'_>) -> HashMap<BasicBlock, BlockPath> {
+pub fn compute_shortest_paths(tcx: TyCtxt<'_>, def_id: DefId) -> HashMap<BasicBlock, BlockPath> {
+    let body = tcx.optimized_mir(def_id);
     let entry = mir::START_BLOCK;
     let mut result: HashMap<BasicBlock, BlockPath> = HashMap::new();
     let mut best_constraints: HashMap<BasicBlock, usize> = HashMap::new();

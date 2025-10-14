@@ -1,9 +1,10 @@
 use super::{
-    controlflow::{self, BlockPath},
+    controlflow::{BlockPath, compute_shortest_paths},
     function::{FunctionInstance, iterate_all_functions},
     types::{CallGraph, CallSite},
+    utils::is_dyn_trait_type,
 };
-use crate::{callgraph::utils::is_dyn_trait_type, timer};
+use crate::timer;
 
 use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
@@ -33,7 +34,9 @@ impl<'tcx> FunctionInstance<'tcx> {
 
         // Compute function internal constraints,
         // which is a mapping from basic block to the path from the entry block to the basic block.
-        let constraints = timer::measure("compute_constraints", || get_constraints(tcx, def_id));
+        let constraints = timer::measure("compute_constraints", || {
+            compute_shortest_paths(tcx, def_id)
+        });
 
         // Extract function call information
         timer::measure("extract_function_call", || {
@@ -407,15 +410,6 @@ where
         typing_env,
         ty::EarlyBinder::bind(value),
     )
-}
-
-/// Get internal constraints from the body of a function
-pub(crate) fn get_constraints(
-    tcx: ty::TyCtxt,
-    def_id: DefId,
-) -> HashMap<mir::BasicBlock, BlockPath> {
-    let mir = tcx.optimized_mir(def_id);
-    controlflow::compute_shortest_paths(mir)
 }
 
 /// Find function candidates that match the given function pointer signature
