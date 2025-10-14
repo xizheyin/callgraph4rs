@@ -1,33 +1,10 @@
 //! Utilities for analyzing MIR control flow.
 
 use rustc_middle::mir::{self, BasicBlock, Body, TerminatorKind};
-use std::collections::{HashMap, HashSet, VecDeque};
-
-/// Represents a path through basic blocks with constraint tracking
-#[derive(Debug, Clone)]
-pub struct BlockPath {
-    /// Sequence of basic blocks forming the path
-    pub blocks: Vec<BasicBlock>,
-    /// Length of the path (number of edges)
-    pub length: usize,
-    /// Number of conditional constraints along the path
-    pub constraints: usize,
-    /// Description of each constraint encountered
-    pub constraint_details: Vec<ConstraintInfo>,
-}
-
-/// Information about a constraint in the path
-#[derive(Debug, Clone)]
-pub struct ConstraintInfo {
-    /// The block containing the constraint
-    pub _block: BasicBlock,
-    /// Type of the constraint
-    pub _kind: ConstraintKind,
-    /// Source code location if available
-    pub _source_info: Option<String>,
-}
+use std::collections::{HashMap, VecDeque};
 
 /// Types of constraints that can appear in MIR
+/// FIXME: Add other types of constraints
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstraintKind {
     /// Switch on an integer value (if/match)
@@ -36,46 +13,51 @@ pub enum ConstraintKind {
     _Other(String),
 }
 
+impl ConstraintKind {
+    /// Determines if a terminator represents a conditional constraint
+    pub fn from_terminator(terminator: &TerminatorKind<'_>) -> Option<Self> {
+        match terminator {
+            TerminatorKind::SwitchInt { .. } => Some(ConstraintKind::SwitchInt),
+            //TerminatorKind::Assert { .. } => Some(ConstraintKind::Assert),
+            _ => None,
+        }
+    }
+}
+
+/// Represents a path through basic blocks with constraint tracking
+#[derive(Debug, Clone)]
+pub struct BlockPath {
+    /// Sequence of basic blocks forming the path
+    pub blocks: Vec<BasicBlock>,
+    /// Number of conditional constraints along the path
+    pub constraints: usize,
+}
+
 impl BlockPath {
     /// Creates a new path with a single basic block
     fn new(block: BasicBlock) -> Self {
         BlockPath {
             blocks: vec![block],
-            length: 0,
             constraints: 0,
-            constraint_details: Vec::new(),
         }
     }
 
-    /// Extends the path with a new basic block, tracking constraints
-    fn extend(&self, block: BasicBlock, kind: Option<ConstraintInfo>) -> Self {
+    /// Extends the path with a new basic block, tracking the path
+    fn extend(&self, block: BasicBlock, is_constraint: bool) -> Self {
         let mut blocks = self.blocks.clone();
         let mut constraints = self.constraints;
-        let mut constraint_details = self.constraint_details.clone();
 
         blocks.push(block);
 
         // If this extension involves a constraint, track it
-        if let Some(info) = kind {
+        if is_constraint {
             constraints += 1;
-            constraint_details.push(info);
         }
 
         BlockPath {
             blocks,
-            length: self.length + 1,
             constraints,
-            constraint_details,
         }
-    }
-}
-
-/// Determines if a terminator represents a conditional constraint
-fn is_constraint_terminator(terminator: &TerminatorKind<'_>) -> Option<ConstraintKind> {
-    match terminator {
-        TerminatorKind::SwitchInt { .. } => Some(ConstraintKind::SwitchInt),
-        //TerminatorKind::Assert { .. } => Some(ConstraintKind::Assert),
-        _ => None,
     }
 }
 
@@ -89,41 +71,44 @@ fn is_constraint_terminator(terminator: &TerminatorKind<'_>) -> Option<Constrain
 /// * A map from each basic block to its shortest path from the entry block
 pub fn compute_shortest_paths(body: &Body<'_>) -> HashMap<BasicBlock, BlockPath> {
     let entry = mir::START_BLOCK;
-    let mut result = HashMap::new();
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
+    let mut result: HashMap<BasicBlock, BlockPath> = HashMap::new();
+    let mut best_constraints: HashMap<BasicBlock, usize> = HashMap::new();
+    let mut deque: VecDeque<BasicBlock> = VecDeque::new();
 
-    // Start with the entry block
+    // initialize: entry block has 0 constraints
     result.insert(entry, BlockPath::new(entry));
-    visited.insert(entry);
-    queue.push_back(entry);
+    best_constraints.insert(entry, 0);
+    deque.push_front(entry);
 
-    // BFS to find shortest paths
-    while let Some(block) = queue.pop_front() {
+    // 0-1 BFS: find the path with the fewest constraints (edge weights 0 or 1)
+    while let Some(block) = deque.pop_front() {
         let current_path = result[&block].clone();
+        let current_cost = best_constraints[&block];
 
-        // Process each successor of the current block
+        // Process all successors of the current block
         if let Some(terminator) = body.basic_blocks[block].terminator.as_ref() {
-            // Check if this terminator represents a constraint
-            let constraint_kind = is_constraint_terminator(&terminator.kind);
+            // Current edge weight: 1 if it's a constraint, 0 otherwise
+            let is_constraint_edge = ConstraintKind::from_terminator(&terminator.kind).is_some();
+            let edge_weight = if is_constraint_edge { 1 } else { 0 };
 
-            // Process each successor
             for target in terminator.successors() {
-                if !visited.contains(&target) {
-                    // Create constraint info if this is a conditional jump
-                    let constraint_info = constraint_kind.as_ref().map(|kind| {
-                        let source_str = format!("{:?}", terminator.source_info);
-                        ConstraintInfo {
-                            _block: block,
-                            _kind: kind.clone(),
-                            _source_info: Some(source_str),
-                        }
-                    });
+                let next_cost = current_cost + edge_weight;
 
-                    let new_path = current_path.extend(target, constraint_info);
-                    result.insert(target, new_path);
-                    visited.insert(target);
-                    queue.push_back(target);
+                // if target has no record or we found a path with fewer constraints, update
+                match best_constraints.get(&target) {
+                    Some(&best) if next_cost >= best => {}
+                    _ => {
+                        let new_path = current_path.extend(target, is_constraint_edge);
+                        result.insert(target, new_path);
+                        best_constraints.insert(target, next_cost);
+
+                        // 0-1 BFS: 0-weight edges go to front, 1-weight edges go to back
+                        if edge_weight == 0 {
+                            deque.push_front(target);
+                        } else {
+                            deque.push_back(target);
+                        }
+                    }
                 }
             }
         }
