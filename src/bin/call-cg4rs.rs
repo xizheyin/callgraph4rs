@@ -7,7 +7,7 @@ struct Args {
     skip_clean: bool,
     project_root_dir: PathBuf,
     manifest_path: Option<PathBuf>,
-    args_without_no_clean: Vec<String>,
+    args: Vec<String>,
 }
 
 #[tokio::main]
@@ -17,13 +17,13 @@ async fn main() -> anyhow::Result<()> {
         skip_clean,
         project_root_dir,
         manifest_path,
-        args_without_no_clean,
+        args,
     } = args().await;
 
     copy_toolchain_file(&project_root_dir).await.unwrap();
     cargo_clean(skip_clean, manifest_path.as_deref()).await?;
 
-    cargo_cg4rs(args_without_no_clean).await?;
+    cargo_cg4rs(args).await?;
     Ok(())
 }
 
@@ -91,7 +91,7 @@ async fn args() -> Args {
     let skip_clean = final_args.iter().any(|arg| arg == "--no-clean");
 
     // 过滤掉--no-clean参数
-    let args_without_no_clean: Vec<String> = final_args
+    let args: Vec<String> = final_args
         .iter()
         .filter(|&arg| arg != "--no-clean")
         .cloned()
@@ -101,7 +101,7 @@ async fn args() -> Args {
         skip_clean,
         project_root_dir,
         manifest_path,
-        args_without_no_clean,
+        args,
     }
 }
 
