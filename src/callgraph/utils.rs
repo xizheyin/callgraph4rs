@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, TyCtxt};
@@ -113,17 +114,7 @@ impl<'tcx> CallGraph<'tcx> {
             return None;
         }
 
-        tracing::info!(
-            "Found {} functions matching {}",
-            target_functions.len(),
-            target_description
-        );
-        for func in &target_functions {
-            tracing::info!(
-                "Matched function: {}",
-                self.function_instance_to_string(tcx, *func)
-            );
-        }
+        tracing::info!("Found {} functions matching", target_functions.len());
 
         // Create mapping from callee to callers with constraint counts
         let mut callee_to_callers: HashMap<
@@ -142,46 +133,95 @@ impl<'tcx> CallGraph<'tcx> {
                 .or_default()
                 .entry(caller)
                 .and_modify(|(c, p)| {
-                    *c += constraints;
-                    *p += package_num;
+                    if constraints < *c {
+                        *c = constraints;
+                        *p = package_num;
+                    }
                 })
                 .or_insert((constraints, package_num));
         }
 
-        // Find all direct and indirect callers with constraint counts
-        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize)> = HashMap::new();
-        let mut queue: VecDeque<(FunctionInstance<'tcx>, (usize, usize))> =
-            target_functions.into_iter().map(|f| (f, (0, 0))).collect();
-        let mut processed: HashSet<FunctionInstance<'tcx>> = HashSet::new();
+        // 使用 Dijkstra 算法查找所有直接或间接调用者的最短约束路径
+        #[derive(Clone)]
+        struct State<'tcx> {
+            cost: usize,
+            node: FunctionInstance<'tcx>,
+            package_sum: usize,
+        }
 
-        while let Some((current, (path_constraints, path_package_num))) = queue.pop_front() {
-            if processed.contains(&current) {
-                continue;
+        impl<'tcx> Eq for State<'tcx> {}
+
+        impl<'tcx> PartialEq for State<'tcx> {
+            fn eq(&self, other: &Self) -> bool {
+                self.cost == other.cost
             }
-            processed.insert(current);
+        }
 
-            if let Some(callers) = callee_to_callers.get(&current) {
-                for (caller, (constraints, package_num)) in callers {
-                    // 累计约束数：当前路径约束 + 当前调用约束
-                    let total_constraints = path_constraints + constraints;
-                    let total_package_num = path_package_num + package_num;
+        impl<'tcx> Ord for State<'tcx> {
+            fn cmp(&self, other: &Self) -> Ordering {
+                // BinaryHeap 是最大堆，这里反转比较以实现最小堆行为
+                other.cost.cmp(&self.cost)
+            }
+        }
 
-                    if !processed.contains(caller) {
-                        // 插入或更新调用者的约束累计值
-                        all_callers
-                            .entry(*caller)
-                            .and_modify(|(c, p)| {
-                                // 如果已存在，取较小值（最短路径）
-                                if total_constraints < *c {
-                                    *c = total_constraints;
-                                }
-                                *p = total_package_num;
-                            })
-                            .or_insert((total_constraints, total_package_num));
+        impl<'tcx> PartialOrd for State<'tcx> {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
 
-                        queue.push_back((*caller, (total_constraints, total_package_num)));
+        let mut dist: HashMap<FunctionInstance<'tcx>, (usize, usize)> = HashMap::new();
+        let mut heap: BinaryHeap<State<'tcx>> = BinaryHeap::new();
+
+        for target in &target_functions {
+            dist.insert(*target, (0, 0));
+            heap.push(State {
+                cost: 0,
+                node: *target,
+                package_sum: 0,
+            });
+        }
+
+        while let Some(State {
+            cost: cur_cost,
+            node: cur_node,
+            package_sum: cur_pkg,
+        }) = heap.pop()
+        {
+            // skip if the current cost is worse than the best known
+            // FIXME: non-negative weights, we can use visited set to skip
+            // but current version is more general
+            if let Some((best, _)) = dist.get(&cur_node) {
+                if cur_cost > *best {
+                    continue;
+                }
+            }
+
+            if let Some(callers) = callee_to_callers.get(&cur_node) {
+                for (caller, (edge_cost, edge_pkg)) in callers {
+                    let next_cost = cur_cost + edge_cost;
+                    let next_pkg = cur_pkg + edge_pkg;
+
+                    match dist.get(caller) {
+                        Some((best, _)) if next_cost >= *best => {}
+                        _ => {
+                            dist.insert(*caller, (next_cost, next_pkg));
+                            heap.push(State {
+                                cost: next_cost,
+                                node: *caller,
+                                package_sum: next_pkg,
+                            });
+                        }
                     }
                 }
+            }
+        }
+
+        // filter out the target functions
+        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize)> = HashMap::new();
+        for (func, (constraints, package_num)) in dist {
+            if !target_functions.contains(&func) {
+                all_callers.insert(func, (constraints, package_num));
             }
         }
 
@@ -190,7 +230,6 @@ impl<'tcx> CallGraph<'tcx> {
             return None;
         }
 
-        // 返回调用者列表及其约束数量
         Some(
             all_callers
                 .into_iter()
