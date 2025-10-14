@@ -42,6 +42,28 @@ impl<'tcx> FunctionInstance<'tcx> {
     pub(crate) fn is_non_instance(&self) -> bool {
         !self.is_instance()
     }
+
+    /// Convert function instance to readable string
+    pub(crate) fn full_path(&self, tcx: TyCtxt<'tcx>, without_args: bool) -> String {
+        match self {
+            Self::Instance(inst) => {
+                let def_id = inst.def_id();
+
+                // Determine whether to include generic arguments based on the without_args option
+                if !without_args && !inst.args.is_empty() {
+                    // Include generic parameter information
+                    tcx.def_path_str_with_args(def_id, inst.args)
+                } else {
+                    // Skip generic parameter information
+                    tcx.def_path_str(def_id)
+                }
+            }
+            Self::NonInstance(def_id) => {
+                // For non-instances, only show the path
+                tcx.def_path_str(def_id)
+            }
+        }
+    }
 }
 
 /// collect all function instances in local crate, including generic instances

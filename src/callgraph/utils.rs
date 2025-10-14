@@ -250,7 +250,7 @@ impl<'tcx> CallGraph<'tcx> {
     ) -> Option<Vec<PathInfo<'tcx>>> {
         self.find_callers_by_predicate(tcx, &format!("path: {target_path}"), |func, tcx| {
             // Get complete function path (including generic parameters)
-            let full_func_path = self.function_instance_to_string(tcx, func);
+            let full_func_path = func.full_path(tcx, self.without_args);
 
             // Also get the basic path without generic parameters
             let base_path = match func {

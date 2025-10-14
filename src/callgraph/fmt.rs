@@ -1,6 +1,6 @@
+use crate::callgraph::CallGraph;
 use crate::callgraph::types::PathInfo;
 use crate::callgraph::utils::get_crate_version;
-use crate::callgraph::CallGraph;
 use rustc_middle::ty::TyCtxt;
 use serde_json::json;
 use std::collections::HashMap;
@@ -11,32 +11,6 @@ use super::function::FunctionInstance;
 use super::types::CallSite;
 
 impl<'tcx> CallGraph<'tcx> {
-    /// Convert function instance to readable string
-    pub(crate) fn function_instance_to_string(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        instance: FunctionInstance<'tcx>,
-    ) -> String {
-        match instance {
-            FunctionInstance::Instance(inst) => {
-                let def_id = inst.def_id();
-
-                // Determine whether to include generic arguments based on the without_args option
-                if !self.without_args && !inst.args.is_empty() {
-                    // Include generic parameter information
-                    tcx.def_path_str_with_args(def_id, inst.args)
-                } else {
-                    // Skip generic parameter information
-                    tcx.def_path_str(def_id)
-                }
-            }
-            FunctionInstance::NonInstance(def_id) => {
-                // For non-instances, only show the path
-                tcx.def_path_str(def_id)
-            }
-        }
-    }
-
     /// Format the call graph as readable text
     pub(crate) fn format_call_graph(&self, tcx: TyCtxt<'tcx>) -> String {
         let mut result = String::new();
@@ -61,7 +35,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         for caller in callers {
             // Get caller name
-            let caller_name = self.function_instance_to_string(tcx, caller);
+            let caller_name = caller.full_path(tcx, self.without_args);
             result.push_str(&format!("Function: {caller_name}\n"));
 
             // Get all calls from this caller
@@ -69,8 +43,8 @@ impl<'tcx> CallGraph<'tcx> {
                 // Sort by callee and constraint count
                 let mut sorted_calls = calls.clone();
                 sorted_calls.sort_by(|a, b| {
-                    let a_name = self.function_instance_to_string(tcx, a.callee());
-                    let b_name = self.function_instance_to_string(tcx, b.callee());
+                    let a_name = a.callee().full_path(tcx, self.without_args);
+                    let b_name = b.callee().full_path(tcx, self.without_args);
                     a_name
                         .cmp(&b_name)
                         .then_with(|| a.constraint_count().cmp(&b.constraint_count()))
@@ -78,7 +52,7 @@ impl<'tcx> CallGraph<'tcx> {
 
                 // Output call information
                 for call in sorted_calls {
-                    let callee_name = self.function_instance_to_string(tcx, call.callee());
+                    let callee_name = call.callee().full_path(tcx, self.without_args);
                     result.push_str(&format!(
                         "  -> {} [constraint: {}]\n",
                         callee_name,
@@ -115,7 +89,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         for caller in callers {
             // Get caller name and information
-            let caller_name = self.function_instance_to_string(tcx, caller);
+            let caller_name = caller.full_path(tcx, self.without_args);
             let caller_def_id = caller.def_id();
             let caller_path = tcx.def_path_str(caller_def_id);
 
@@ -124,8 +98,8 @@ impl<'tcx> CallGraph<'tcx> {
                 // Sort by callee for consistent output
                 let mut sorted_calls = calls.clone();
                 sorted_calls.sort_by(|a, b| {
-                    let a_name = self.function_instance_to_string(tcx, a.callee());
-                    let b_name = self.function_instance_to_string(tcx, b.callee());
+                    let a_name = a.callee().full_path(tcx, self.without_args);
+                    let b_name = b.callee().full_path(tcx, self.without_args);
                     a_name
                         .cmp(&b_name)
                         .then_with(|| a.constraint_count().cmp(&b.constraint_count()))
@@ -134,7 +108,7 @@ impl<'tcx> CallGraph<'tcx> {
                 // Create an array of callee objects
                 let mut callees = Vec::new();
                 for call in sorted_calls {
-                    let callee_name = self.function_instance_to_string(tcx, call.callee());
+                    let callee_name = call.callee().full_path(tcx, self.without_args);
                     let callee_def_id = call.callee().def_id();
                     let callee_path = tcx.def_path_str(callee_def_id);
 
@@ -202,7 +176,7 @@ impl<'tcx> CallGraph<'tcx> {
             package_num,
         } in &sorted_callers
         {
-            let caller_name = self.function_instance_to_string(tcx, *caller);
+            let caller_name = caller.full_path(tcx, self.without_args);
             result.push_str(&format!(
                 "- {caller_name} [path constraints: {constraints}, package num: {package_num}]\n"
             ));
@@ -235,7 +209,7 @@ impl<'tcx> CallGraph<'tcx> {
             package_num,
         } in &sorted_callers
         {
-            let caller_name = self.function_instance_to_string(tcx, *caller);
+            let caller_name = caller.full_path(tcx, self.without_args);
             let caller_def_id = caller.def_id();
             let caller_path = tcx.def_path_str(caller_def_id);
 
