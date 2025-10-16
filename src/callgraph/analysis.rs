@@ -612,47 +612,42 @@ fn candidates_for_dyn_trait<'tcx>(
         return candidates_for_dyn_fn_sig(tcx, inputs, output);
     }
 
-    // 对于普通 trait，查找所有实现了该 trait 的类型的方法
-    // 并补充 trait 本身的默认实现（如果存在），确保覆盖不遗漏
+    // For ordinary traits, find the methods of all types that implement the trait
+    // and supplement the trait's own default implementation (if any) to ensure no omission
     let mut candidates = Vec::new();
-    let mut seen: std::collections::HashSet<DefId> = std::collections::HashSet::new();
 
-    // 获取 trait 本身定义的同名方法（可能包含默认实现）
-    let trait_method_def_id = tcx
-        .associated_item_def_ids(trait_id)
-        .iter()
-        .find_map(|&item_def_id| {
-            let item = tcx.associated_item(item_def_id);
-            if item.name().to_string() == method_name
-                && matches!(item.kind, ty::AssocKind::Fn { .. })
-            {
-                Some(item_def_id)
-            } else {
-                None
-            }
-        });
+    // Find the default method of the trait (if any)
+    let trait_method_def_id =
+        tcx.associated_item_def_ids(trait_id)
+            .iter()
+            .find_map(|&item_def_id| {
+                let item = tcx.associated_item(item_def_id);
+                if item.name().to_string() == method_name
+                    && matches!(item.kind, ty::AssocKind::Fn { .. })
+                {
+                    Some(item_def_id)
+                } else {
+                    None
+                }
+            });
 
-    // 遍历所有实现了该 trait 的类型
+    // Traverse all types that implement the trait
     let all_impls = tcx.all_impls(trait_id);
     for impl_def_id in all_impls {
-        // 查找该实现中的指定方法
+        // Find the specified method in the impl
         let mut found_override = false;
         for &item_def_id in tcx.associated_item_def_ids(impl_def_id) {
             let item = tcx.associated_item(item_def_id);
 
-            // 检查是否是我们要找的方法（impl 中的重载）
+            // Check if it's the method we're looking for (impl override)
             if item.name().to_string() == method_name
                 && matches!(item.kind, ty::AssocKind::Fn { .. })
             {
                 found_override = true;
-
-                // 去重：不同 impl 的同名方法通常是不同的 DefId，但仍做防重
-                if seen.insert(item_def_id) {
-                    if let Some(instance) = trivial_resolve(tcx, item_def_id) {
-                        candidates.push(instance);
-                    } else {
-                        candidates.push(FunctionInstance::new_non_instance(item_def_id));
-                    }
+                if let Some(instance) = trivial_resolve(tcx, item_def_id) {
+                    candidates.push(instance);
+                } else {
+                    candidates.push(FunctionInstance::new_non_instance(item_def_id));
                 }
             }
         }
@@ -660,12 +655,10 @@ fn candidates_for_dyn_trait<'tcx>(
         // 如果该 impl 没有重载该方法，且 trait 有同名方法，则加入 trait 的默认实现
         if !found_override {
             if let Some(def_id) = trait_method_def_id {
-                if seen.insert(def_id) {
-                    if let Some(instance) = trivial_resolve(tcx, def_id) {
-                        candidates.push(instance);
-                    } else {
-                        candidates.push(FunctionInstance::new_non_instance(def_id));
-                    }
+                if let Some(instance) = trivial_resolve(tcx, def_id) {
+                    candidates.push(instance);
+                } else {
+                    candidates.push(FunctionInstance::new_non_instance(def_id));
                 }
             }
         }
