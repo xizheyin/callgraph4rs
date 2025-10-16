@@ -1,3 +1,7 @@
+//! In Rust, there are two types of function calls:
+//! 1. Static dispatch: the function to call is determined at compile time.
+//! 2. Dynamic dispatch: the function to call is determined at runtime.
+
 use super::{
     controlflow::{BlockPath, compute_shortest_paths},
     function::{FunctionInstance, iterate_all_functions},
@@ -144,52 +148,52 @@ impl<'tcx> FunctionInstance<'tcx> {
                 let ty::TyKind::FnDef(def_id, monoed_args) = monod.kind() else {
                     return None;
                 };
-                    let callee_defkind = self.tcx.def_kind(def_id);
-                    info!("Found direct call {:?}, kind: {:?}", monod, callee_defkind);
+                let callee_defkind = self.tcx.def_kind(def_id);
+                info!("Found direct call {:?}, kind: {:?}", monod, callee_defkind);
 
-                        // check if the first parameter is a dyn trait
+                // check if the first parameter is a dyn trait
                 if matches!(callee_defkind, def::DefKind::AssocFn)
                     && !monoed_args.is_empty()
-                            && let Some(first_param) = monoed_args[0].as_type()
-                            && is_dyn_trait_type(first_param)
-                        {
-                            info!("Found trait method call with dyn self: {:?}", monod);
-                            return self.handle_dyn_trait_method_call(*def_id, first_param);
-                    }
+                    && let Some(first_param) = monoed_args[0].as_type()
+                    && is_dyn_trait_type(first_param)
+                {
+                    info!("Found trait method call with dyn self: {:?}", monod);
+                    return self.handle_dyn_trait_method_call(*def_id, first_param);
+                }
 
-                    match self.tcx.def_kind(def_id) {
-                        // bare function, method, associated function
-                        def::DefKind::Fn | def::DefKind::AssocFn => {
-                            debug!("Try resolve instance: {:?}", monod);
-                            // use caller's context to create TypingEnv, not callee's
-                            let caller_def_id = self.caller_instance.def_id();
-                            let instance_result = ty::Instance::try_resolve(
-                                self.tcx,
-                                TypingEnv::post_analysis(self.tcx, caller_def_id), // Use caller's typing environment for resolution
-                                *def_id,
-                                monoed_args,
-                            );
+                match self.tcx.def_kind(def_id) {
+                    // bare function, method, associated function
+                    def::DefKind::Fn | def::DefKind::AssocFn => {
+                        debug!("Try resolve instance: {:?}", monod);
+                        // use caller's context to create TypingEnv, not callee's
+                        let caller_def_id = self.caller_instance.def_id();
+                        let instance_result = ty::Instance::try_resolve(
+                            self.tcx,
+                            TypingEnv::post_analysis(self.tcx, caller_def_id), // Use caller's typing environment for resolution
+                            *def_id,
+                            monoed_args,
+                        );
 
-                            match instance_result {
-                                Err(err) => {
-                                    error!("Instance [{:?}] resolve failed: {:?}", monod, err)
-                                }
-                                Ok(opt_instance) => {
-                                    if let Some(instance) = opt_instance {
-                                        info!("Resolved instance successfully: {:?}", instance);
-                                        return Some(FunctionInstance::new_instance(instance));
-                                    } else {
-                                        warn!("Resolve [{:#?}] failed, trivial resolve", monod);
-                                        return trivial_resolve(self.tcx, *def_id).or_else(|| {
+                        match instance_result {
+                            Err(err) => {
+                                error!("Instance [{:?}] resolve failed: {:?}", monod, err)
+                            }
+                            Ok(opt_instance) => {
+                                if let Some(instance) = opt_instance {
+                                    info!("Resolved instance successfully: {:?}", instance);
+                                    return Some(FunctionInstance::new_instance(instance));
+                                } else {
+                                    warn!("Resolve [{:#?}] failed, trivial resolve", monod);
+                                    return trivial_resolve(self.tcx, *def_id).or_else(|| {
                                                             warn!("Trivial resolve [{:?}] also failed, using non-instance", def_id);
                                                             Some(FunctionInstance::new_non_instance(*def_id))
                                                         });
-                                    }
                                 }
                             }
                         }
-                        other => error!("unknown callee type: {:?}", other),
                     }
+                    other => error!("unknown callee type: {:?}", other),
+                }
 
                 None
             }
@@ -609,24 +613,59 @@ fn candidates_for_dyn_trait<'tcx>(
     }
 
     // 对于普通 trait，查找所有实现了该 trait 的类型的方法
+    // 并补充 trait 本身的默认实现（如果存在），确保覆盖不遗漏
     let mut candidates = Vec::new();
+    let mut seen: std::collections::HashSet<DefId> = std::collections::HashSet::new();
+
+    // 获取 trait 本身定义的同名方法（可能包含默认实现）
+    let trait_method_def_id = tcx
+        .associated_item_def_ids(trait_id)
+        .iter()
+        .find_map(|&item_def_id| {
+            let item = tcx.associated_item(item_def_id);
+            if item.name().to_string() == method_name
+                && matches!(item.kind, ty::AssocKind::Fn { .. })
+            {
+                Some(item_def_id)
+            } else {
+                None
+            }
+        });
 
     // 遍历所有实现了该 trait 的类型
     let all_impls = tcx.all_impls(trait_id);
     for impl_def_id in all_impls {
         // 查找该实现中的指定方法
+        let mut found_override = false;
         for &item_def_id in tcx.associated_item_def_ids(impl_def_id) {
             let item = tcx.associated_item(item_def_id);
 
-            // 检查是否是我们要找的方法
+            // 检查是否是我们要找的方法（impl 中的重载）
             if item.name().to_string() == method_name
                 && matches!(item.kind, ty::AssocKind::Fn { .. })
             {
-                // 尝试解析实例
-                if let Some(instance) = trivial_resolve(tcx, item_def_id) {
-                    candidates.push(instance);
-                } else {
-                    candidates.push(FunctionInstance::new_non_instance(item_def_id));
+                found_override = true;
+
+                // 去重：不同 impl 的同名方法通常是不同的 DefId，但仍做防重
+                if seen.insert(item_def_id) {
+                    if let Some(instance) = trivial_resolve(tcx, item_def_id) {
+                        candidates.push(instance);
+                    } else {
+                        candidates.push(FunctionInstance::new_non_instance(item_def_id));
+                    }
+                }
+            }
+        }
+
+        // 如果该 impl 没有重载该方法，且 trait 有同名方法，则加入 trait 的默认实现
+        if !found_override {
+            if let Some(def_id) = trait_method_def_id {
+                if seen.insert(def_id) {
+                    if let Some(instance) = trivial_resolve(tcx, def_id) {
+                        candidates.push(instance);
+                    } else {
+                        candidates.push(FunctionInstance::new_non_instance(def_id));
+                    }
                 }
             }
         }
