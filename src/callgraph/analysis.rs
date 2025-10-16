@@ -120,30 +120,41 @@ impl<'tcx> FunctionInstance<'tcx> {
             ) -> Option<FunctionInstance<'tcx>> {
                 use mir::Operand::*;
                 match func {
-                    Constant(_) => self.handle_monoed_direct_callee(monod_ty),
+                    Constant(_) => self.handle_monod_direct_callee(monod_ty),
                     // Move or copy operands - 支持函数指针调用
-                    Move(_) | Copy(_) => self.handle_monoed_indirect_callee(monod_ty),
+                    Move(_) | Copy(_) => self.handle_monod_indirect_callee(monod_ty),
+                }
+            }
+
+            fn handle_monod_direct_callee(
+                &mut self,
+                monod: ty::Ty<'tcx>,
+            ) -> Option<FunctionInstance<'tcx>> {
+                match monod.kind() {
+                    ty::TyKind::FnDef(_, _) => self.handle_monod_fn_def_callee(monod),
+                    _ => None,
                 }
             }
 
             /// Handle monomorphized direct callee
-            fn handle_monoed_direct_callee(
+            fn handle_monod_fn_def_callee(
                 &mut self,
                 monod: ty::Ty<'tcx>,
             ) -> Option<FunctionInstance<'tcx>> {
-                if let ty::TyKind::FnDef(def_id, monoed_args) = monod.kind() {
+                let ty::TyKind::FnDef(def_id, monoed_args) = monod.kind() else {
+                    return None;
+                };
                     let callee_defkind = self.tcx.def_kind(def_id);
                     info!("Found direct call {:?}, kind: {:?}", monod, callee_defkind);
 
-                    if matches!(callee_defkind, def::DefKind::AssocFn) {
                         // check if the first parameter is a dyn trait
-                        if !monoed_args.is_empty()
+                if matches!(callee_defkind, def::DefKind::AssocFn)
+                    && !monoed_args.is_empty()
                             && let Some(first_param) = monoed_args[0].as_type()
                             && is_dyn_trait_type(first_param)
                         {
                             info!("Found trait method call with dyn self: {:?}", monod);
                             return self.handle_dyn_trait_method_call(*def_id, first_param);
-                        }
                     }
 
                     match self.tcx.def_kind(def_id) {
@@ -179,9 +190,7 @@ impl<'tcx> FunctionInstance<'tcx> {
                         }
                         other => error!("unknown callee type: {:?}", other),
                     }
-                } else {
-                    error!("unexpected function type: {:#?}", monod.kind());
-                }
+
                 None
             }
 
@@ -189,11 +198,20 @@ impl<'tcx> FunctionInstance<'tcx> {
             ///
             /// When Operand is Move/Copy, the callee is a function pointer or dyn trait object
             /// We need to resolve the function pointer/trait object to get the actual callee
-            fn handle_monoed_indirect_callee(
+            fn handle_monod_indirect_callee(
                 &mut self,
                 monod_ty: ty::Ty<'tcx>,
             ) -> Option<FunctionInstance<'tcx>> {
                 match monod_ty.kind() {
+                    ty::TyKind::FnDef(_, _) => {
+                        // In some cases, a local variable is assigned with a function,
+                        // E.g. ```
+                        //  let a = func();
+                        //  let b = a();
+                        // ```
+                        // In this case, we need to resolve the function pointer to get the actual callee.
+                        return self.handle_monod_fn_def_callee(monod_ty);
+                    }
                     ty::TyKind::FnPtr(poly_sig, _) => {
                         let sig = poly_sig.skip_binder();
                         let candidates = candidates_for_fnptr_sig(self.tcx, sig);
@@ -477,7 +495,10 @@ pub(crate) fn candidates_for_fnptr_sig<'tcx>(
     candidates
 }
 
-// 辅助：从 dyn Trait 类型中提取完整的 trait 信息
+// extract trait information from dyn Trait type
+// Note:
+// The last two return value are the args tuple and output type of the method.
+// It is valid only when the method is a Fn/FnMut/FnOnce trait method.
 fn extract_dyn_trait_info<'tcx>(
     tcx: TyCtxt<'tcx>,
     dyn_ty: ty::Ty<'tcx>,
