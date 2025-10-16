@@ -315,6 +315,33 @@ impl<'tcx> CallGraph<'tcx> {
     }
 }
 
+/// judge whether the type is a dyn trait type
+/// including &dyn Trait, Box<dyn Trait>, Rc<dyn Trait>, Arc<dyn Trait>, Pin<dyn Trait>, Cow<'_, dyn Trait>, etc.
 pub(crate) fn is_dyn_trait_type(ty: ty::Ty<'_>) -> bool {
-    matches!(ty.kind(), ty::TyKind::Dynamic(..))
+    use ty::TyKind;
+
+    // Recursively detect dyn trait types through common wrappers
+    fn contains_dyn(ty: ty::Ty<'_>) -> bool {
+        match ty.kind() {
+            TyKind::Dynamic(..) => true,
+            // &dyn Trait or &T where T may be a wrapper around dyn Trait
+            TyKind::Ref(_, inner, _) => contains_dyn(*inner),
+            // Box<dyn Trait>, Rc<dyn Trait>, Arc<dyn Trait>, Pin<dyn Trait>, Cow<'_, dyn Trait>, etc.
+            TyKind::Adt(_, args) => {
+                for i in 0..args.len() {
+                    if let Some(inner) = args[i].as_type() {
+                        if contains_dyn(inner) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            // Tuple elements might contain dyn Trait
+            TyKind::Tuple(elems) => elems.iter().any(|t| contains_dyn(t)),
+            _ => false,
+        }
+    }
+
+    contains_dyn(ty)
 }
