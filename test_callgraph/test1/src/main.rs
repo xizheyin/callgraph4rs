@@ -7,6 +7,7 @@ mod dyn_example;
 mod external_trait_example;
 mod manual_serde;
 mod ultra_simple_serde;
+mod fn_pointer_example;
 // mod serde_import_only;
 
 // 通用特征 - 产品接口
@@ -395,4 +396,7 @@ fn main() {
 
     println!("\n=== 手动实现serde示例 (v1.0.100) ===");
     manual_serde::main();
+
+    println!("\n=== 函数指针示例 ===");
+    fn_pointer_example::main();
 }

@@ -13,7 +13,7 @@ use crate::timer;
 use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind, visit::Visitor},
-    ty::{self, Instance, TyCtxt, TypeFoldable, TypingEnv, normalize_erasing_regions::NormalizationError},
+    ty::{self, Binder, Instance, TyCtxt, TypeFoldable, TypingEnv, normalize_erasing_regions::NormalizationError},
 };
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, info, warn};
@@ -202,8 +202,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                 return self.handle_monod_fn_def_callee(monod_ty);
             }
             ty::TyKind::FnPtr(poly_sig, _) => {
-                let sig = poly_sig.skip_binder();
-                let candidates = candidates_for_fnptr_sig(self.tcx, sig);
+                let candidates = candidates_for_fnptr_sig(self.tcx, *poly_sig);
                 if candidates.is_empty() {
                     tracing::warn!("fnptr call: no cands found for sig {:?}", poly_sig);
                 } else {
@@ -381,41 +380,32 @@ where
 /// FIXME: needs further optimization
 pub(crate) fn candidates_for_fnptr_sig<'tcx>(
     tcx: TyCtxt<'tcx>,
-    sig: ty::FnSigTys<TyCtxt<'tcx>>,
+    sig: Binder<'tcx, ty::FnSigTys<TyCtxt<'tcx>>>,
 ) -> Vec<FunctionInstance<'tcx>> {
-    fn types_match_ignoring_regions<'tcx>(tcx: TyCtxt<'tcx>, a: ty::Ty<'tcx>, b: ty::Ty<'tcx>) -> bool {
-        // 擦除 regions 后比较类型
-        let a_erased = tcx.erase_regions(a);
-        let b_erased = tcx.erase_regions(b);
-        a_erased == b_erased
-    }
-
-    // Cache borrowed inputs/output once to avoid accidental moves
+    let sig = tcx.normalize_erasing_late_bound_regions(TypingEnv::fully_monomorphized(), sig);
     let sig_inputs = sig.inputs();
     let sig_output = sig.output();
 
-    // 使用抽象函数遍历所有 crate 中的函数
     let candidates = iterate_all_functions(
         tcx,
         |def_id| {
-            let candidate_sig = tcx.fn_sig(def_id).skip_binder();
+            let type_env = ty::TypingEnv::post_analysis(tcx, def_id);
 
-            // 检查参数数量是否匹配
-            if candidate_sig.inputs().skip_binder().len() != sig_inputs.len() {
+            let candidate_sig = tcx.normalize_erasing_late_bound_regions(type_env, tcx.fn_sig(def_id).skip_binder());
+
+            // check if the candidate function has the same number of inputs as the signature
+            if candidate_sig.inputs().len() != sig_inputs.len() {
                 return false;
             }
 
-            // 检查返回类型是否匹配
-            let return_types_match =
-                types_match_ignoring_regions(tcx, candidate_sig.output().skip_binder(), sig_output);
-
-            // 检查输入类型是否匹配
+            // check if the candidate function has the same return type as the signature
+            let return_types_match = candidate_sig.output() == sig_output;
+            // check if the candidate function has the same input types as the signature
             let inputs_match = candidate_sig
                 .inputs()
-                .skip_binder()
                 .iter()
                 .zip(sig_inputs.iter())
-                .all(|(cand_input, sig_input)| types_match_ignoring_regions(tcx, *cand_input, *sig_input));
+                .all(|(cand_input, sig_input)| *cand_input == *sig_input);
 
             return_types_match && inputs_match
         },
