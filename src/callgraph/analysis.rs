@@ -6,14 +6,16 @@ use super::{
     controlflow::{BlockPath, compute_shortest_paths},
     function::{FunctionInstance, iterate_all_functions},
     types::{CallGraph, CallSite},
-    utils::is_dyn_trait_type,
 };
 use crate::timer;
 
 use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind, visit::Visitor},
-    ty::{self, Binder, Instance, TyCtxt, TypeFoldable, TypingEnv, normalize_erasing_regions::NormalizationError},
+    ty::{
+        self, Binder, Instance, InstanceKind, TyCtxt, TypeFoldable, TypingEnv, layout::MaybeResult,
+        normalize_erasing_regions::NormalizationError,
+    },
 };
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, info, warn};
@@ -135,22 +137,16 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     }
 
     /// Handle monomorphized direct callee
-    fn handle_monod_fn_def_callee(&mut self, monod: ty::Ty<'tcx>) -> Option<FunctionInstance<'tcx>> {
+    fn handle_monod_fn_def_callee(
+        &mut self,
+        first_arg: Option<ty::Ty<'tcx>>,
+        monod: ty::Ty<'tcx>,
+    ) -> Option<FunctionInstance<'tcx>> {
         let ty::TyKind::FnDef(def_id, monoed_args) = monod.kind() else {
             return None;
         };
         let callee_defkind = self.tcx.def_kind(def_id);
         info!("Found direct call {:?}, kind: {:?}", monod, callee_defkind);
-
-        // check if the first parameter is a dyn trait
-        if matches!(callee_defkind, def::DefKind::AssocFn)
-            && !monoed_args.is_empty()
-            && let Some(first_param) = monoed_args[0].as_type()
-            && is_dyn_trait_type(first_param)
-        {
-            info!("Found trait method call with dyn self: {:?}", monod);
-            return self.handle_dyn_trait_method_call(*def_id, first_param);
-        }
 
         match self.tcx.def_kind(def_id) {
             // bare function, method, associated function
@@ -169,6 +165,11 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                     Ok(opt_instance) => {
                         if let Some(instance) = opt_instance {
                             info!("Resolved instance successfully: {:?}", instance);
+                            if matches!(instance.def, InstanceKind::Virtual(..)) {
+                                // Virtual function call!!!!!
+                                info!("Found trait method call with dyn self: {:?}", monod);
+                                self.handle_dyn_trait_method_call(first_arg, *def_id);
+                            }
                             return Some(FunctionInstance::new_instance(instance));
                         } else {
                             warn!("Resolve [{:#?}] failed, trivial resolve", monod);
