@@ -23,6 +23,11 @@ fn example_str(x: &str) -> &str {
     x
 }
 
+// 另一种同签名的字符串函数，便于直接解析到具体目标
+fn id_str(x: &str) -> &str {
+    x
+}
+
 // 结构体持有函数指针
 struct OpHolder {
     op: fn(i32) -> i32,
@@ -50,6 +55,52 @@ fn make_op(kind: &str) -> fn(i32) -> i32 {
         "sqr" => square,
         _ => negate,
     }
+}
+
+// 返回字符串函数指针的工厂，签名为 (&str) -> &str
+fn make_str_op(kind: &str) -> fn(&str) -> &str {
+    match kind {
+        "echo" => example_str,
+        "id" => id_str,
+        _ => example_str,
+    }
+}
+
+fn test1() {
+    // 8) 直接可解析的字符串函数指针调用（签名匹配到 (&str) -> &str）
+    let fp_str: fn(&str) -> &str = example_str; // 直接指向具体函数 example_str
+    let s1 = fp_str("world");
+    println!("fp_str(\"world\") [example_str] = {}", s1);
+}
+
+fn test2() {
+    // 9) 直接可解析的字符串函数指针调用（签名匹配到 (&str) -> &str）
+    let fp_str: fn(&str) -> &str = id_str; // 直接指向具体函数 id_str
+    let s2 = fp_str("rust");
+    println!("fp_str(\"rust\") [id_str] = {}", s2);
+}
+
+fn test3() {
+    // 10) 集合中的字符串函数指针遍历调用（也应可解析到具体目标）
+    let s_ops: [fn(&str) -> &str; 2] = [example_str, id_str];
+    for (i, op) in s_ops.iter().enumerate() {
+        let v = op("hi");
+        println!("s_ops[{}](\"hi\") = {}", i, v);
+    }
+}
+
+fn test4() {
+    // 10) 工厂返回字符串函数指针并调用（可根据kind直接确定具体函数）
+    let f_echo = make_str_op("echo");
+    let f_id = make_str_op("id");
+    println!("make_str_op(echo)(\"hello\") = {}", f_echo("hello"));
+    println!("make_str_op(id)(\"hello\") = {}", f_id("hello"));
+}
+
+fn test5() {
+    // 10) 工厂返回字符串函数指针并调用（可根据kind直接确定具体函数）
+    let f_echo = make_str_op("echo");
+    println!("make_str_op(echo)(\"hello\") = {}", f_echo("hello"));
 }
 
 // 展示多种函数指针相关调用
