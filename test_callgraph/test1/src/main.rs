@@ -5,9 +5,10 @@ use std::rc::Rc;
 
 mod dyn_example;
 mod external_trait_example;
+mod fn_pointer_example;
+mod fn_trait_example;
 mod manual_serde;
 mod ultra_simple_serde;
-mod fn_pointer_example;
 // mod serde_import_only;
 
 // 通用特征 - 产品接口
@@ -195,10 +196,7 @@ impl InventoryManager {
         // 添加价值信息到报告
         report.push_str("\n=== 价值报告 ===\n");
         report.push_str(&format!("电子产品总价值: ¥{:.2}\n", electronics_value));
-        report.push_str(&format!(
-            "电子产品折后价值: ¥{:.2}\n",
-            electronics_discounted
-        ));
+        report.push_str(&format!("电子产品折后价值: ¥{:.2}\n", electronics_discounted));
         report.push_str(&format!("服装总价值: ¥{:.2}\n", clothing_value));
         report.push_str(&format!("服装折后价值: ¥{:.2}\n", clothing_discounted));
 
@@ -399,4 +397,7 @@ fn main() {
 
     println!("\n=== 函数指针示例 ===");
     fn_pointer_example::main();
+
+    println!("\n=== Fn/FnMut/FnOnce 示例 ===");
+    fn_trait_example::xxmain();
 }
