@@ -1,8 +1,7 @@
+use rustc_hir::def_id::DefId;
+use rustc_middle::ty::TyCtxt;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-
-use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{self, TyCtxt};
 
 use crate::callgraph::{function::FunctionInstance, types::PathInfo};
 
@@ -32,11 +31,7 @@ pub(crate) fn get_crate_version<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Strin
     let crate_name_str = crate_name.to_string();
     if let Some(idx) = crate_name_str.rfind('-') {
         let potential_version = &crate_name_str[idx + 1..];
-        if potential_version
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit())
-        {
+        if potential_version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return potential_version.to_string();
         }
     }
@@ -50,10 +45,8 @@ impl<'tcx> CallGraph<'tcx> {
     /// for each unique caller-callee pair
     pub fn deduplicate_call_sites(&mut self) {
         // Create a map to track the call site with minimum constraint_cnt for each caller-callee pair
-        let mut min_constraints: HashMap<(FunctionInstance<'tcx>, FunctionInstance<'tcx>), usize> =
-            HashMap::new();
-        let mut min_indices: HashMap<(FunctionInstance<'tcx>, FunctionInstance<'tcx>), usize> =
-            HashMap::new();
+        let mut min_constraints: HashMap<(FunctionInstance<'tcx>, FunctionInstance<'tcx>), usize> = HashMap::new();
+        let mut min_indices: HashMap<(FunctionInstance<'tcx>, FunctionInstance<'tcx>), usize> = HashMap::new();
 
         // Find minimum constraint count for each caller-callee pair
         for (index, call_site) in self.call_sites.iter().enumerate() {
@@ -117,10 +110,8 @@ impl<'tcx> CallGraph<'tcx> {
         tracing::info!("Found {} functions matching", target_functions.len());
 
         // Create mapping from callee to callers with constraint counts
-        let mut callee_to_callers: HashMap<
-            FunctionInstance<'tcx>,
-            HashMap<FunctionInstance<'tcx>, (usize, usize)>,
-        > = HashMap::new();
+        let mut callee_to_callers: HashMap<FunctionInstance<'tcx>, HashMap<FunctionInstance<'tcx>, (usize, usize)>> =
+            HashMap::new();
 
         for call_site in &self.call_sites {
             let caller = call_site.caller();
@@ -243,11 +234,7 @@ impl<'tcx> CallGraph<'tcx> {
     }
 
     /// Find all functions that directly or indirectly call the specified function
-    pub fn find_callers_by_path(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        target_path: &str,
-    ) -> Option<Vec<PathInfo<'tcx>>> {
+    pub fn find_callers_by_path(&self, tcx: TyCtxt<'tcx>, target_path: &str) -> Option<Vec<PathInfo<'tcx>>> {
         self.find_callers_by_predicate(tcx, &format!("path: {target_path}"), |func, tcx| {
             // Get complete function path (including generic parameters)
             let full_func_path = func.full_path(tcx, self.without_args);
@@ -313,35 +300,4 @@ impl<'tcx> CallGraph<'tcx> {
             }
         })
     }
-}
-
-/// judge whether the type is a dyn trait type
-/// including &dyn Trait, Box<dyn Trait>, Rc<dyn Trait>, Arc<dyn Trait>, Pin<dyn Trait>, Cow<'_, dyn Trait>, etc.
-pub(crate) fn is_dyn_trait_type(ty: ty::Ty<'_>) -> bool {
-    use ty::TyKind;
-
-    // Recursively detect dyn trait types through common wrappers
-    fn contains_dyn(ty: ty::Ty<'_>) -> bool {
-        match ty.kind() {
-            TyKind::Dynamic(..) => true,
-            // &dyn Trait or &T where T may be a wrapper around dyn Trait
-            TyKind::Ref(_, inner, _) => contains_dyn(*inner),
-            // Box<dyn Trait>, Rc<dyn Trait>, Arc<dyn Trait>, Pin<dyn Trait>, Cow<'_, dyn Trait>, etc.
-            TyKind::Adt(_, args) => {
-                for i in 0..args.len() {
-                    if let Some(inner) = args[i].as_type() {
-                        if contains_dyn(inner) {
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-            // Tuple elements might contain dyn Trait
-            TyKind::Tuple(elems) => elems.iter().any(|t| contains_dyn(t)),
-            _ => false,
-        }
-    }
-
-    contains_dyn(ty)
 }
