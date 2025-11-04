@@ -69,6 +69,55 @@ struct SearchFunctionCall<'tcx, 'local> {
     current_bb: mir::BasicBlock,
 }
 
+impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
+    fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
+        // Update current basic block
+        self.current_bb = block;
+        self.super_basic_block_data(block, data);
+    }
+
+    fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, _location: mir::Location) {
+        if let TerminatorKind::Call { func, args, .. } | TerminatorKind::TailCall { func, args, .. } = &terminator.kind
+        {
+            tracing::debug!(
+                "Found Call => callee: {:?}, func.ty: {:?}",
+                func,
+                func.ty(self.caller_body, self.tcx)
+            );
+
+            let typing_env = TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
+
+            let before_mono_ty = func.ty(self.caller_body, self.tcx);
+
+            // Perform monomorphization
+            let monod_result = monomorphize(
+                self.tcx,
+                typing_env,
+                self.caller_instance.instance().expect("instance is None"),
+                before_mono_ty,
+            );
+
+            let callee = match monod_result {
+                Ok(monoed) => {
+                    //calculate first argument type for potential dyn trait method call
+                    let first_arg_ty = args.iter().next().map(|arg| arg.node.ty(self.caller_body, self.tcx));
+                    self.handle_monoed_callee(func, first_arg_ty, monoed)
+                }
+                Err(err) => self.handle_mono_error(func, before_mono_ty, err),
+            };
+
+            // If callee function is found, add to the call list
+            if let Some(callee) = callee {
+                self.callees.push(CallSite::new(
+                    *self.caller_instance,
+                    callee,
+                    self.constraints[&self.current_bb].constraints,
+                ));
+            }
+        }
+    }
+}
+
 impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     fn new(
         tcx: ty::TyCtxt<'tcx>,
@@ -407,55 +456,6 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
 
         // 对于普通 trait，返回基本信息，签名需要从其他地方获取
         Some((trait_id, method, vec![], self.tcx.types.unit))
-    }
-}
-
-impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
-    fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
-        // Update current basic block
-        self.current_bb = block;
-        self.super_basic_block_data(block, data);
-    }
-
-    fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, _location: mir::Location) {
-        if let TerminatorKind::Call { func, args, .. } | TerminatorKind::TailCall { func, args, .. } = &terminator.kind
-        {
-            tracing::debug!(
-                "Found Call => callee: {:?}, func.ty: {:?}",
-                func,
-                func.ty(self.caller_body, self.tcx)
-            );
-
-            let typing_env = TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
-
-            let before_mono_ty = func.ty(self.caller_body, self.tcx);
-
-            // Perform monomorphization
-            let monod_result = monomorphize(
-                self.tcx,
-                typing_env,
-                self.caller_instance.instance().expect("instance is None"),
-                before_mono_ty,
-            );
-
-            let callee = match monod_result {
-                Ok(monoed) => {
-                    //calculate first argument type for potential dyn trait method call
-                    let first_arg_ty = args.iter().next().map(|arg| arg.node.ty(self.caller_body, self.tcx));
-                    self.handle_monoed_callee(func, first_arg_ty, monoed)
-                }
-                Err(err) => self.handle_mono_error(func, before_mono_ty, err),
-            };
-
-            // If callee function is found, add to the call list
-            if let Some(callee) = callee {
-                self.callees.push(CallSite::new(
-                    *self.caller_instance,
-                    callee,
-                    self.constraints[&self.current_bb].constraints,
-                ));
-            }
-        }
     }
 }
 
