@@ -13,7 +13,7 @@ use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind, visit::Visitor},
     ty::{
-        self, Binder, Instance, InstanceKind, TyCtxt, TypeFoldable, TypingEnv, layout::MaybeResult,
+        self, Binder, Instance, InstanceKind, TyCtxt, TypeFoldable, TypingEnv,
         normalize_erasing_regions::NormalizationError,
     },
 };
@@ -79,11 +79,8 @@ impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
     fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, _location: mir::Location) {
         if let TerminatorKind::Call { func, args, .. } | TerminatorKind::TailCall { func, args, .. } = &terminator.kind
         {
-            tracing::debug!(
-                "Found Call => callee: {:?}, func.ty: {:?}",
-                func,
-                func.ty(self.caller_body, self.tcx)
-            );
+            let func_ty = func.ty(self.caller_body, self.tcx);
+            tracing::debug!("Found callee: {:?}, func.ty: {:?}", func, func_ty);
 
             let typing_env = TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
 
@@ -168,14 +165,14 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     fn handle_monoed_callee(
         &mut self,
         func: &mir::Operand<'tcx>,
-        first_arg: Option<ty::Ty<'tcx>>,
-        monod_ty: ty::Ty<'tcx>,
+        first_arg_ty: Option<ty::Ty<'tcx>>,
+        monod_callee: ty::Ty<'tcx>,
     ) -> Option<FunctionInstance<'tcx>> {
         use mir::Operand::*;
         match func {
-            Constant(_) => self.handle_monod_direct_callee(func, first_arg, monod_ty),
+            Constant(_) => self.handle_monod_direct_callee(func, monod_callee, first_arg_ty),
             // Move or copy operands - 支持函数指针调用
-            Move(_) | Copy(_) => self.handle_monod_indirect_callee(func, first_arg, monod_ty),
+            Move(_) | Copy(_) => self.handle_monod_indirect_callee(func, first_arg_ty, monod_callee),
         }
     }
 
@@ -183,21 +180,20 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     fn handle_monod_direct_callee(
         &mut self,
         func: &mir::Operand<'tcx>,
-        first_arg: Option<ty::Ty<'tcx>>,
-        monod: ty::Ty<'tcx>,
+        monod_callee: ty::Ty<'tcx>,
+        first_arg_ty: Option<ty::Ty<'tcx>>,
     ) -> Option<FunctionInstance<'tcx>> {
-        match monod.kind() {
-            ty::TyKind::FnDef(_, _) => {
+        tracing::info!("Found direct call {:?}, func.ty: {:?}", func, monod_callee);
+        match monod_callee.kind() {
+            ty::TyKind::FnDef(..) => {
                 // In this case, the callee is like a direct function call or method
                 // Such as ```
                 //  let a = func();
                 // ```
-                return self.handle_monod_fn_def_callee(first_arg, monod);
+                return self.handle_monod_fn_def_callee(first_arg_ty, monod_callee);
             }
-            ty::TyKind::FnPtr(_, _) => self.handle_monod_fn_ptr_callee(func, monod),
-            _ => {
-                tracing::warn!("skip constant (unsupported type): {:?}", monod);
-            }
+            ty::TyKind::FnPtr(..) => self.handle_monod_fn_ptr_callee(func, monod_callee),
+            _ => tracing::warn!("skip constant (unsupported type): {:?}", monod_callee),
         }
         None
     }
@@ -209,22 +205,23 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     fn handle_monod_indirect_callee(
         &mut self,
         func: &mir::Operand<'tcx>,
-        first_arg: Option<ty::Ty<'tcx>>,
-        monod: ty::Ty<'tcx>,
+        first_arg_ty: Option<ty::Ty<'tcx>>,
+        monod_callee: ty::Ty<'tcx>,
     ) -> Option<FunctionInstance<'tcx>> {
-        match monod.kind() {
-            ty::TyKind::FnDef(_, _) => {
+        tracing::info!("Found indirect call {:?}, func.ty: {:?}", func, monod_callee);
+        match monod_callee.kind() {
+            ty::TyKind::FnDef(..) => {
                 // In some cases, a local variable is assigned with a function,
                 // E.g. ```
                 //  let a = func;
                 //  let b = a();
                 // ```
                 // In this case, we need to resolve the function pointer to get the actual callee.
-                return self.handle_monod_fn_def_callee(first_arg, monod);
+                return self.handle_monod_fn_def_callee(first_arg_ty, monod_callee);
             }
-            ty::TyKind::FnPtr(..) => self.handle_monod_fn_ptr_callee(func, monod),
+            ty::TyKind::FnPtr(..) => self.handle_monod_fn_ptr_callee(func, monod_callee),
             _ => {
-                tracing::warn!("skip move or copy (unsupported type): {:?}", monod);
+                tracing::warn!("skip move or copy (unsupported type): {:?}", monod_callee);
             }
         }
         None
@@ -239,58 +236,52 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         let ty::TyKind::FnDef(def_id, monoed_args) = monod.kind() else {
             return None;
         };
-        let callee_defkind = self.tcx.def_kind(def_id);
-        info!("Found direct call {:?}, kind: {:?}", monod, callee_defkind);
 
         match self.tcx.def_kind(def_id) {
             // bare function, method, associated function
-            def::DefKind::Fn | def::DefKind::AssocFn => {
-                debug!("Try resolve instance: {:?}", monod);
-                // use caller's context to create TypingEnv, not callee's
-                let caller_def_id = self.caller_instance.def_id();
-                // Use caller's typing environment for resolution
-                let type_env = TypingEnv::post_analysis(self.tcx, caller_def_id);
-                let result = ty::Instance::try_resolve(self.tcx, type_env, *def_id, monoed_args);
-
-                match result {
-                    Err(err) => {
-                        error!("Instance [{:?}] resolve failed: {:?}", monod, err)
-                    }
-                    Ok(opt_instance) => {
-                        if let Some(instance) = opt_instance {
-                            info!("Resolved instance successfully: {:?}", instance);
-                            if matches!(instance.def, InstanceKind::Virtual(..)) {
-                                // Virtual function call!!!!!
-                                info!("Found trait method call with dyn self: {:?}", monod);
-                                self.handle_dyn_trait_method_call(first_arg, *def_id);
-                            }
-                            return Some(FunctionInstance::new_instance(instance));
-                        } else {
-                            warn!("Resolve [{:#?}] failed, trivial resolve", monod);
-                            return trivial_resolve(self.tcx, *def_id).or_else(|| {
-                                warn!("Trivial resolve [{:?}] failed, using non-instance", def_id);
-                                Some(FunctionInstance::new_non_instance(*def_id))
-                            });
-                        }
-                    }
-                }
-            }
+            def::DefKind::Fn | def::DefKind::AssocFn => {}
             other => error!("unknown callee type: {:?}", other),
         }
 
+        debug!("Try resolve instance: {:?}", monod);
+        // use caller's context to create TypingEnv, not callee's
+        let caller_def_id = self.caller_instance.def_id();
+        // Use caller's typing environment for resolution
+        let type_env = TypingEnv::post_analysis(self.tcx, caller_def_id);
+        let result = ty::Instance::try_resolve(self.tcx, type_env, *def_id, monoed_args);
+
+        match result {
+            Err(err) => {
+                error!("Instance [{:?}] resolve failed: {:?}", monod, err)
+            }
+            Ok(opt_instance) => {
+                if let Some(instance) = opt_instance {
+                    info!("Resolved instance successfully: {:?}", instance);
+                    if matches!(instance.def, InstanceKind::Virtual(..)) {
+                        // Virtual function call!!!!!
+                        info!("Found trait method call with dyn self: {:?}", monod);
+                        self.handle_dyn_trait_method_call(first_arg, *def_id);
+                    }
+                    return Some(FunctionInstance::new_instance(instance));
+                } else {
+                    warn!("Resolve [{:#?}] failed, trivial resolve", monod);
+                    return trivial_resolve(self.tcx, *def_id).or_else(|| {
+                        warn!("Trivial resolve [{:?}] failed, using non-instance", def_id);
+                        Some(FunctionInstance::new_non_instance(*def_id))
+                    });
+                }
+            }
+        }
         None
     }
 
     fn handle_monod_fn_ptr_callee(&mut self, func: &mir::Operand<'tcx>, monod: ty::Ty<'tcx>) {
         tracing::info!("First, we try to resolve function pointer directly, func: {:?}", func);
 
-        // 先尝试基于当前基本块的本地回溯解析 fn 指针变量来源，提取明确的 FnDef 候选
+        // First, we try to backtrace the local candidates from the function pointer operand.
         let mut local_candidates = self.resolve_fnptr_local_candidates(func);
         if !local_candidates.is_empty() {
-            tracing::info!(
-                "fnptr call: found {} local candidates via backtrace",
-                local_candidates.len()
-            );
+            tracing::info!("fnptr call: found {} local cands via backtrace", local_candidates.len());
             for cand in local_candidates.drain(..) {
                 self.callees.push(CallSite::new(
                     *self.caller_instance,
@@ -301,20 +292,20 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             return;
         }
 
-        tracing::info!("Failed,next, we try to resolve function pointer by signature matching.");
+        tracing::info!("Failed to precision resolve function pointer, trying resolve func ptr by sig match.");
         if let ty::TyKind::FnPtr(poly_sig, _) = monod.kind() {
             let candidates = candidates_for_fnptr_sig(self.tcx, *poly_sig);
             if candidates.is_empty() {
                 tracing::warn!("fnptr call: no cands found for sig {:?}", poly_sig);
-            } else {
-                tracing::info!("fnptr call: found {} sig-matched cands", candidates.len());
-                for cand in candidates {
-                    self.callees.push(CallSite::new(
-                        *self.caller_instance,
-                        cand,
-                        self.constraints[&self.current_bb].constraints,
-                    ));
-                }
+                return;
+            }
+            tracing::info!("fnptr call: found {} sig-matched cands", candidates.len());
+            for cand in candidates {
+                self.callees.push(CallSite::new(
+                    *self.caller_instance,
+                    cand,
+                    self.constraints[&self.current_bb].constraints,
+                ));
             }
         }
     }
@@ -756,19 +747,41 @@ fn peel_dyn_from_receiver<'tcx>(
 }
 
 impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
+    /// This method do some more precision analysis on the function pointer operand.
+    /// It reversely search in current basic block to find the last assignment to the target local.
     fn resolve_fnptr_local_candidates(&mut self, func: &mir::Operand<'tcx>) -> Vec<FunctionInstance<'tcx>> {
-        use mir::Operand::{Copy as OpCopy, Move as OpMove};
+        use mir::Operand;
         use rustc_middle::mir::{Rvalue, StatementKind};
 
         let mut out = Vec::new();
         let target_local = match func {
-            OpMove(place) | OpCopy(place) => place.local,
+            Operand::Move(place) | Operand::Copy(place) => place.local,
             _ => return out,
         };
 
-        // 在当前基本块逆序查找对该 local 的最近赋值
+        // reversely search in current basic block to find the last assignment to the target local
         let bb = &self.caller_body.basic_blocks[self.current_bb];
         let mut follow_local = target_local;
+
+        let mut resolve_and_push = |op: &mir::Operand<'tcx>| -> bool {
+            if let Some((def_id, args)) = op.const_fn_def() {
+                let caller_def_id = self.caller_instance.def_id();
+                let type_env = TypingEnv::post_analysis(self.tcx, caller_def_id);
+                match ty::Instance::try_resolve(self.tcx, type_env, def_id, args) {
+                    Ok(Some(inst)) => out.push(FunctionInstance::new_instance(inst)),
+                    _ => {
+                        if let Some(inst) = trivial_resolve(self.tcx, def_id) {
+                            out.push(inst);
+                        } else {
+                            out.push(FunctionInstance::new_non_instance(def_id));
+                        }
+                    }
+                }
+                // Found!
+                return true;
+            }
+            false
+        };
 
         for stmt in bb.statements.iter().rev() {
             if let StatementKind::Assign(assign) = &stmt.kind {
@@ -778,45 +791,17 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                 }
                 match rhs {
                     Rvalue::Use(op) => {
-                        if let Some((def_id, args)) = operand_const_fn_def(op) {
-                            // 解析成具体实例
-                            let caller_def_id = self.caller_instance.def_id();
-                            let type_env = TypingEnv::post_analysis(self.tcx, caller_def_id);
-                            match ty::Instance::try_resolve(self.tcx, type_env, def_id, args) {
-                                Ok(Some(inst)) => out.push(FunctionInstance::new_instance(inst)),
-                                _ => {
-                                    if let Some(inst) = trivial_resolve(self.tcx, def_id) {
-                                        out.push(inst);
-                                    } else {
-                                        out.push(FunctionInstance::new_non_instance(def_id));
-                                    }
-                                }
-                            }
+                        if resolve_and_push(op) {
                             break;
                         }
                         // 链式复制：继续跟踪新的来源局部
-                        match op {
-                            OpMove(p2) | OpCopy(p2) => {
-                                follow_local = p2.local;
-                                continue;
-                            }
-                            _ => {}
+                        if let Operand::Move(p2) | Operand::Copy(p2) = op {
+                            follow_local = p2.local;
+                            continue;
                         }
                     }
                     Rvalue::Cast(_, op, _ty) => {
-                        if let Some((def_id, args)) = operand_const_fn_def(op) {
-                            let caller_def_id = self.caller_instance.def_id();
-                            let type_env = TypingEnv::post_analysis(self.tcx, caller_def_id);
-                            match ty::Instance::try_resolve(self.tcx, type_env, def_id, args) {
-                                Ok(Some(inst)) => out.push(FunctionInstance::new_instance(inst)),
-                                _ => {
-                                    if let Some(inst) = trivial_resolve(self.tcx, def_id) {
-                                        out.push(inst);
-                                    } else {
-                                        out.push(FunctionInstance::new_non_instance(def_id));
-                                    }
-                                }
-                            }
+                        if resolve_and_push(op) {
                             break;
                         }
                     }
@@ -827,8 +812,4 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
 
         out
     }
-}
-/// 逆向回溯当前基本块中对 fn 指针局部的赋值来源，解析出明确的函数项候选
-fn operand_const_fn_def<'tcx>(op: &mir::Operand<'tcx>) -> Option<(DefId, ty::GenericArgsRef<'tcx>)> {
-    op.const_fn_def()
 }
