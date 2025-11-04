@@ -294,7 +294,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
 
         tracing::info!("Failed to precision resolve function pointer, trying resolve func ptr by sig match.");
         if let ty::TyKind::FnPtr(poly_sig, _) = monod.kind() {
-            let candidates = candidates_for_fnptr_sig(self.tcx, *poly_sig);
+            let candidates = candidates_for_fnptr_sig(self.tcx, self.caller_instance.def_id(), *poly_sig);
             if candidates.is_empty() {
                 tracing::warn!("fnptr call: no cands found for sig {:?}", poly_sig);
                 return;
@@ -382,7 +382,9 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         let mut maybe_output: Option<ty::Ty<'tcx>> = None;
 
         for p in preds.iter() {
-            match p.skip_binder() {
+            // Erase late-bound lifetimes by normalizing the binder before matching
+            let pred = self.tcx.normalize_erasing_late_bound_regions(typing_env, p);
+            match pred {
                 ty::ExistentialPredicate::Trait(tr) => {
                     // 检查是否是 Fn/FnMut/FnOnce trait
                     if let Some(fn_id) = fn_trait {
@@ -526,9 +528,10 @@ where
 /// FIXME: needs further optimization
 pub(crate) fn candidates_for_fnptr_sig<'tcx>(
     tcx: TyCtxt<'tcx>,
+    caller_def_id: DefId,
     sig: Binder<'tcx, ty::FnSigTys<TyCtxt<'tcx>>>,
 ) -> Vec<FunctionInstance<'tcx>> {
-    let sig = tcx.normalize_erasing_late_bound_regions(TypingEnv::fully_monomorphized(), sig);
+    let sig = tcx.normalize_erasing_late_bound_regions(TypingEnv::post_analysis(tcx, caller_def_id), sig);
     let sig_inputs = sig.inputs();
     let sig_output = sig.output();
 
@@ -579,48 +582,51 @@ fn candidates_for_dyn_fn_trait<'tcx>(
     output: ty::Ty<'tcx>,
 ) -> Vec<FunctionInstance<'tcx>> {
     fn types_match_ignoring_regions<'tcx>(tcx: TyCtxt<'tcx>, a: ty::Ty<'tcx>, b: ty::Ty<'tcx>) -> bool {
+        // Erase all regions for comparison to avoid lifetime mismatches in logs and equality
         let a_erased = tcx.erase_regions(a);
         let b_erased = tcx.erase_regions(b);
-        println!(
-            "a= {:?} b= {:?} a_erased= {:?} b_erased= {:?}",
-            a, b, a_erased, b_erased
-        );
         a_erased == b_erased
     }
 
-    let mut candidates = Vec::new();
-
-    for owner_def_id in tcx.hir_body_owners() {
-        let ty = tcx.type_of(owner_def_id).skip_binder();
-        if let ty::TyKind::FnDef(fn_def_id, _args) = ty.kind() {
-            let candidate_sig = tcx.fn_sig(*fn_def_id).skip_binder();
-
-            println!(
-                "candidate_sig= {:?} candidate_sig.inputs().skip_binder().len()= {:?}",
-                candidate_sig,
-                candidate_sig.inputs().skip_binder().len()
-            );
-            if candidate_sig.inputs().skip_binder().len() == inputs.len() {
-                let return_types_match =
-                    types_match_ignoring_regions(tcx, candidate_sig.output().skip_binder(), output);
-
-                let inputs_match = candidate_sig
-                    .inputs()
-                    .skip_binder()
-                    .iter()
-                    .zip(inputs.iter())
-                    .all(|(cand_input, want_input)| types_match_ignoring_regions(tcx, *cand_input, *want_input));
-
-                if return_types_match && inputs_match {
-                    if let Some(instance) = trivial_resolve(tcx, *fn_def_id) {
-                        candidates.push(instance);
-                    } else {
-                        candidates.push(FunctionInstance::new_non_instance(*fn_def_id));
-                    }
-                }
+    let candidates = iterate_all_functions(
+        tcx,
+        |def_id| {
+            // Only consider functions and associated functions
+            match tcx.def_kind(def_id) {
+                def::DefKind::Fn | def::DefKind::AssocFn => {}
+                _ => return false,
             }
-        }
-    }
+            // tracing::info!("candidate: {}", tcx.def_path_str(def_id));
+
+            // Normalize to erase late-bound regions in the candidate signature
+            let type_env = ty::TypingEnv::post_analysis(tcx, def_id);
+            let candidate_sig = tcx.normalize_erasing_late_bound_regions(type_env, tcx.fn_sig(def_id).skip_binder());
+
+            // Inputs count must match exactly
+            if candidate_sig.inputs().len() != inputs.len() {
+                return false;
+            }
+
+            // Compare return type ignoring regions
+            let return_types_match = types_match_ignoring_regions(tcx, candidate_sig.output(), output);
+
+            // Compare each input type ignoring regions
+            let inputs_match = candidate_sig
+                .inputs()
+                .iter()
+                .zip(inputs.iter())
+                .all(|(cand_input, want_input)| types_match_ignoring_regions(tcx, *cand_input, *want_input));
+
+            return_types_match && inputs_match
+        },
+        |def_id| {
+            if let Some(instance) = trivial_resolve(tcx, def_id) {
+                Some(instance)
+            } else {
+                Some(FunctionInstance::new_non_instance(def_id))
+            }
+        },
+    );
 
     tracing::debug!(
         "Found {} candidates for dyn fn signature with {} inputs",
