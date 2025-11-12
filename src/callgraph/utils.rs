@@ -224,6 +224,8 @@ impl<'tcx> CallGraph<'tcx> {
         Some(
             all_callers
                 .into_iter()
+                // filter out non-local callers
+                .filter(|(caller, _)| caller.def_id().is_local())
                 .map(|(caller, (constraints, package_num))| PathInfo {
                     caller,
                     constraints,
