@@ -174,11 +174,12 @@ impl<'tcx> CallGraph<'tcx> {
             caller,
             constraints,
             package_num,
+            path_len,
         } in &sorted_callers
         {
             let caller_name = caller.full_path(tcx, self.without_args);
             result.push_str(&format!(
-                "- {caller_name} [path constraints: {constraints}, package num: {package_num}]\n"
+                "- {caller_name} [path constraints: {constraints}, package num: {package_num}, path len: {path_len}]\n"
             ));
         }
 
@@ -207,6 +208,7 @@ impl<'tcx> CallGraph<'tcx> {
             caller,
             constraints,
             package_num,
+            path_len,
         } in &sorted_callers
         {
             let caller_name = caller.full_path(tcx, self.without_args);
@@ -222,7 +224,8 @@ impl<'tcx> CallGraph<'tcx> {
                 "version": version,
                 "path": caller_path,
                 "path_constraints": constraints,
-                "path_package_num": package_num
+                "path_package_num": package_num,
+                "path_len": path_len
             }));
         }
 

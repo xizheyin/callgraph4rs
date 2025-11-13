@@ -72,6 +72,7 @@ pub(crate) struct PathInfo<'tcx> {
     pub(crate) caller: FunctionInstance<'tcx>,
     pub(crate) constraints: usize,
     pub(crate) package_num: usize,
+    pub(crate) path_len: usize,
 }
 
 impl<'tcx> PartialOrd for PathInfo<'tcx> {
@@ -87,7 +88,10 @@ impl<'tcx> Ord for PathInfo<'tcx> {
 
         match a_name.cmp(&b_name) {
             std::cmp::Ordering::Equal => match self.constraints.cmp(&other.constraints) {
-                std::cmp::Ordering::Equal => self.package_num.cmp(&other.package_num),
+                std::cmp::Ordering::Equal => match self.package_num.cmp(&other.package_num) {
+                    std::cmp::Ordering::Equal => self.path_len.cmp(&other.path_len),
+                    non_eq => non_eq,
+                },
                 non_eq => non_eq,
             },
             non_eq => non_eq,

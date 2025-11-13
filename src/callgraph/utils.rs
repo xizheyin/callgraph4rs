@@ -138,6 +138,7 @@ impl<'tcx> CallGraph<'tcx> {
             cost: usize,
             node: FunctionInstance<'tcx>,
             package_sum: usize,
+            depth: usize,
         }
 
         impl<'tcx> Eq for State<'tcx> {}
@@ -161,15 +162,16 @@ impl<'tcx> CallGraph<'tcx> {
             }
         }
 
-        let mut dist: HashMap<FunctionInstance<'tcx>, (usize, usize)> = HashMap::new();
+        let mut dist: HashMap<FunctionInstance<'tcx>, (usize, usize, usize)> = HashMap::new();
         let mut heap: BinaryHeap<State<'tcx>> = BinaryHeap::new();
 
         for target in &target_functions {
-            dist.insert(*target, (0, 0));
+            dist.insert(*target, (0, 0, 0));
             heap.push(State {
                 cost: 0,
                 node: *target,
                 package_sum: 0,
+                depth: 0,
             });
         }
 
@@ -177,12 +179,13 @@ impl<'tcx> CallGraph<'tcx> {
             cost: cur_cost,
             node: cur_node,
             package_sum: cur_pkg,
+            depth: cur_depth,
         }) = heap.pop()
         {
             // skip if the current cost is worse than the best known
             // FIXME: non-negative weights, we can use visited set to skip
             // but current version is more general
-            if let Some((best, _)) = dist.get(&cur_node) {
+            if let Some((best, _, _)) = dist.get(&cur_node) {
                 if cur_cost > *best {
                     continue;
                 }
@@ -192,15 +195,17 @@ impl<'tcx> CallGraph<'tcx> {
                 for (caller, (edge_cost, edge_pkg)) in callers {
                     let next_cost = cur_cost + edge_cost;
                     let next_pkg = cur_pkg + edge_pkg;
+                    let next_depth = cur_depth + 1;
 
                     match dist.get(caller) {
-                        Some((best, _)) if next_cost >= *best => {}
+                        Some((best, _, _)) if next_cost >= *best => {}
                         _ => {
-                            dist.insert(*caller, (next_cost, next_pkg));
+                            dist.insert(*caller, (next_cost, next_pkg, next_depth));
                             heap.push(State {
                                 cost: next_cost,
                                 node: *caller,
                                 package_sum: next_pkg,
+                                depth: next_depth,
                             });
                         }
                     }
@@ -209,10 +214,10 @@ impl<'tcx> CallGraph<'tcx> {
         }
 
         // filter out the target functions
-        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize)> = HashMap::new();
-        for (func, (constraints, package_num)) in dist {
+        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize, usize)> = HashMap::new();
+        for (func, (constraints, package_num, path_len)) in dist {
             if !target_functions.contains(&func) {
-                all_callers.insert(func, (constraints, package_num));
+                all_callers.insert(func, (constraints, package_num, path_len));
             }
         }
 
@@ -224,12 +229,12 @@ impl<'tcx> CallGraph<'tcx> {
         Some(
             all_callers
                 .into_iter()
-                // filter out non-local callers
                 .filter(|(caller, _)| caller.def_id().is_local())
-                .map(|(caller, (constraints, package_num))| PathInfo {
+                .map(|(caller, (constraints, package_num, path_len))| PathInfo {
                     caller,
                     constraints,
                     package_num,
+                    path_len,
                 })
                 .collect(),
         )
