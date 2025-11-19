@@ -9,10 +9,7 @@ pub(crate) struct CallGraph<'tcx> {
 }
 
 impl<'tcx> CallGraph<'tcx> {
-    pub(crate) fn new(
-        all_generic_instances: Vec<FunctionInstance<'tcx>>,
-        without_args: bool,
-    ) -> Self {
+    pub(crate) fn new(all_generic_instances: Vec<FunctionInstance<'tcx>>, without_args: bool) -> Self {
         Self {
             instances: all_generic_instances.into_iter().collect(),
             call_sites: Vec::new(),
@@ -31,11 +28,7 @@ pub struct CallSite<'tcx> {
 
 impl<'tcx> CallSite<'tcx> {
     /// Create a new CallSite
-    pub fn new(
-        caller: FunctionInstance<'tcx>,
-        callee: FunctionInstance<'tcx>,
-        constraint_count: usize,
-    ) -> Self {
+    pub fn new(caller: FunctionInstance<'tcx>, callee: FunctionInstance<'tcx>, constraint_count: usize) -> Self {
         Self {
             caller,
             callee,
@@ -60,9 +53,9 @@ impl<'tcx> CallSite<'tcx> {
 
     pub fn package_num(&self) -> usize {
         if self.caller.def_id().krate == self.callee.def_id().krate {
-            1
-        } else {
             0
+        } else {
+            1
         }
     }
 }
