@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
+use toml::Value as TomlValue;
 
 struct Args {
     skip_clean: bool,
@@ -20,7 +21,6 @@ async fn main() -> anyhow::Result<()> {
         args,
     } = args().await;
 
-    copy_toolchain_file(&project_root_dir).await.unwrap();
     cargo_clean(skip_clean, manifest_path.as_deref()).await?;
 
     cargo_cg4rs(args).await?;
@@ -65,9 +65,7 @@ async fn args() -> Args {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| env::current_dir().expect("Failed to get current directory"))
     } else {
-        eprintln!(
-            "Warning: Neither --root-path nor --manifest-path provided. Using current directory."
-        );
+        eprintln!("Warning: Neither --root-path nor --manifest-path provided. Using current directory.");
         env::current_dir().expect("Failed to get current directory")
     };
 
@@ -80,10 +78,7 @@ async fn args() -> Args {
         if manifest_path.exists() {
             final_args.push(format!("--manifest-path={}", manifest_path.display()));
         } else {
-            eprintln!(
-                "Warning: Cargo.toml not found at {}",
-                manifest_path.display()
-            );
+            eprintln!("Warning: Cargo.toml not found at {}", manifest_path.display());
         }
     }
 
@@ -91,11 +86,7 @@ async fn args() -> Args {
     let skip_clean = final_args.iter().any(|arg| arg == "--no-clean");
 
     // 过滤掉--no-clean参数
-    let args: Vec<String> = final_args
-        .iter()
-        .filter(|&arg| arg != "--no-clean")
-        .cloned()
-        .collect();
+    let args: Vec<String> = final_args.iter().filter(|&arg| arg != "--no-clean").cloned().collect();
 
     Args {
         skip_clean,
@@ -105,22 +96,24 @@ async fn args() -> Args {
     }
 }
 
-async fn copy_toolchain_file(project_root_dir: &Path) -> anyhow::Result<()> {
-    // 获取用户的主目录
-    let home_dir = env::var("HOME").expect("Could not find home directory");
-    let cargo_toolchain_path = Path::new(&home_dir).join(".cargo/rust-toolchain.toml");
-    // Check if ~/.cargo/rust-toolchain.toml exists
-    // This is because in build.rs, we copy the rust-toolchain.toml to `~/.cargo/rust-toolchain.toml`
-    // We should copy it to the root directory of the project we are analyzing
-    // to make sure the toolchain is the same as the one used to build the project
-    if !cargo_toolchain_path.exists() {
-        eprintln!("rust-toolchain.toml not found in ~/.cargo.");
-        return Ok(());
+fn toolchain_channel_from_embedded() -> Option<String> {
+    let content = include_str!("../../rust-toolchain.toml");
+    let parsed: TomlValue = toml::from_str(content).ok()?;
+    match &parsed {
+        TomlValue::Table(t) => {
+            // support both legacy and modern layout
+            if let Some(TomlValue::Table(tl)) = t.get("toolchain") {
+                if let Some(TomlValue::String(ch)) = tl.get("channel") {
+                    return Some(ch.clone());
+                }
+            }
+            if let Some(TomlValue::String(ch)) = t.get("channel") {
+                return Some(ch.clone());
+            }
+            None
+        }
+        _ => None,
     }
-    // Copy toolchain file to the root directory of the project we are analyzing
-    let target_path = project_root_dir.join("rust-toolchain.toml");
-    fs::copy(&cargo_toolchain_path, &target_path)?;
-    Ok(())
 }
 
 async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::Result<()> {
@@ -128,7 +121,11 @@ async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::
         tracing::trace!("Start to cargo clean.");
 
         // 收集clean命令的参数
-        let mut clean_args = vec!["clean".to_string()];
+        let mut clean_args: Vec<String> = Vec::new();
+        if let Some(tc) = toolchain_channel_from_embedded() {
+            clean_args.push(format!("+{}", tc));
+        }
+        clean_args.push("clean".to_string());
 
         // 添加manifest-path参数
         if let Some(path) = &manifest_path {
@@ -158,7 +155,11 @@ async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::
 
 async fn cargo_cg4rs(args: Vec<String>) -> anyhow::Result<()> {
     // 执行cargo cg4rs命令
-    let mut cg_args = vec!["cg4rs".to_string()];
+    let mut cg_args: Vec<String> = Vec::new();
+    if let Some(tc) = toolchain_channel_from_embedded() {
+        cg_args.push(format!("+{}", tc));
+    }
+    cg_args.push("cg4rs".to_string());
     cg_args.extend(args.clone());
 
     println!("Executing: cargo {}", cg_args.join(" "));
