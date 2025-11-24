@@ -1,4 +1,4 @@
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{CrateNum, DefId};
 use rustc_middle::ty::TyCtxt;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -138,6 +138,7 @@ impl<'tcx> CallGraph<'tcx> {
             cost: usize,
             node: FunctionInstance<'tcx>,
             package_sum: usize,
+            package_unique: HashSet<CrateNum>,
             depth: usize,
         }
 
@@ -162,15 +163,16 @@ impl<'tcx> CallGraph<'tcx> {
             }
         }
 
-        let mut dist: HashMap<FunctionInstance<'tcx>, (usize, usize, usize)> = HashMap::new();
+        let mut dist: HashMap<FunctionInstance<'tcx>, (usize, usize, usize, usize)> = HashMap::new();
         let mut heap: BinaryHeap<State<'tcx>> = BinaryHeap::new();
 
         for target in &target_functions {
-            dist.insert(*target, (0, 0, 0));
+            dist.insert(*target, (0, 0, 0, 0));
             heap.push(State {
                 cost: 0,
                 node: *target,
                 package_sum: 0,
+                package_unique: HashSet::new(),
                 depth: 0,
             });
         }
@@ -179,32 +181,39 @@ impl<'tcx> CallGraph<'tcx> {
             cost: cur_cost,
             node: cur_node,
             package_sum: cur_pkg,
+            package_unique: cur_pkg_unique,
             depth: cur_depth,
         }) = heap.pop()
         {
             // skip if the current cost is worse than the best known
             // FIXME: non-negative weights, we can use visited set to skip
             // but current version is more general
-            if let Some((best, _, _)) = dist.get(&cur_node) {
+            if let Some((best, _, _, _)) = dist.get(&cur_node) {
                 if cur_cost > *best {
                     continue;
                 }
             }
 
+            // Find all caller
             if let Some(callers) = callee_to_callers.get(&cur_node) {
                 for (caller, (edge_cost, edge_pkg)) in callers {
                     let next_cost = cur_cost + edge_cost;
-                    let next_pkg = cur_pkg + edge_pkg;
-                    let next_depth = cur_depth + 1;
 
                     match dist.get(caller) {
-                        Some((best, _, _)) if next_cost >= *best => {}
+                        Some((best, _, _, _)) if next_cost >= *best => {}
                         _ => {
-                            dist.insert(*caller, (next_cost, next_pkg, next_depth));
+                            let next_pkg = cur_pkg + edge_pkg;
+                            let next_depth = cur_depth + 1;
+                            let mut next_package_unique = cur_pkg_unique.clone();
+                            next_package_unique.insert(caller.def_id().krate);
+                            // Update the best path if a shorter one is found
+                            dist.insert(*caller, (next_cost, next_pkg, next_package_unique.len(), next_depth));
+
                             heap.push(State {
                                 cost: next_cost,
                                 node: *caller,
                                 package_sum: next_pkg,
+                                package_unique: next_package_unique,
                                 depth: next_depth,
                             });
                         }
@@ -214,10 +223,10 @@ impl<'tcx> CallGraph<'tcx> {
         }
 
         // filter out the target functions
-        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize, usize)> = HashMap::new();
-        for (func, (constraints, package_num, path_len)) in dist {
+        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize, usize, usize)> = HashMap::new();
+        for (func, (constraints, package_num, package_unique, path_len)) in dist {
             if !target_functions.contains(&func) {
-                all_callers.insert(func, (constraints, package_num, path_len));
+                all_callers.insert(func, (constraints, package_num, package_unique, path_len));
             }
         }
 
@@ -230,12 +239,15 @@ impl<'tcx> CallGraph<'tcx> {
             all_callers
                 .into_iter()
                 .filter(|(caller, _)| caller.def_id().is_local())
-                .map(|(caller, (constraints, package_num, path_len))| PathInfo {
-                    caller,
-                    constraints,
-                    package_num,
-                    path_len,
-                })
+                .map(
+                    |(caller, (constraints, package_num, package_num_unique, path_len))| PathInfo {
+                        caller,
+                        constraints,
+                        package_num,
+                        package_num_unique,
+                        path_len,
+                    },
+                )
                 .collect(),
         )
     }

@@ -65,6 +65,7 @@ pub(crate) struct PathInfo<'tcx> {
     pub(crate) caller: FunctionInstance<'tcx>,
     pub(crate) constraints: usize,
     pub(crate) package_num: usize,
+    pub(crate) package_num_unique: usize,
     pub(crate) path_len: usize,
 }
 

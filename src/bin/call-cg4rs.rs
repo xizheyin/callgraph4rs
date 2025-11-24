@@ -1,5 +1,4 @@
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use toml::Value as TomlValue;
@@ -16,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     // 获取命令行参数
     let Args {
         skip_clean,
-        project_root_dir,
+        _project_root_dir,
         manifest_path,
         args,
     } = args().await;

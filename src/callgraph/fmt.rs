@@ -19,14 +19,10 @@ impl<'tcx> CallGraph<'tcx> {
         result.push_str("===========\n\n");
 
         // Organize calls by caller
-        let mut calls_by_caller: HashMap<FunctionInstance<'tcx>, Vec<&CallSite<'tcx>>> =
-            HashMap::new();
+        let mut calls_by_caller: HashMap<FunctionInstance<'tcx>, Vec<&CallSite<'tcx>>> = HashMap::new();
 
         for call_site in &self.call_sites {
-            calls_by_caller
-                .entry(call_site.caller())
-                .or_default()
-                .push(call_site);
+            calls_by_caller.entry(call_site.caller()).or_default().push(call_site);
         }
 
         // Sort callers to get consistent output
@@ -70,14 +66,10 @@ impl<'tcx> CallGraph<'tcx> {
     /// Format the call graph as JSON
     pub(crate) fn format_call_graph_as_json(&self, tcx: TyCtxt<'tcx>) -> String {
         // Create a map to organize calls by caller
-        let mut calls_by_caller: HashMap<FunctionInstance<'tcx>, Vec<&CallSite<'tcx>>> =
-            HashMap::new();
+        let mut calls_by_caller: HashMap<FunctionInstance<'tcx>, Vec<&CallSite<'tcx>>> = HashMap::new();
 
         for call_site in &self.call_sites {
-            calls_by_caller
-                .entry(call_site.caller())
-                .or_default()
-                .push(call_site);
+            calls_by_caller.entry(call_site.caller()).or_default().push(call_site);
         }
 
         // Sort callers to get consistent output
@@ -129,11 +121,7 @@ impl<'tcx> CallGraph<'tcx> {
                 let caller_version = get_crate_version(tcx, caller_def_id);
 
                 // Calculate the maximum constraint depth
-                let max_constraint_depth = calls
-                    .iter()
-                    .map(|c| c.constraint_count())
-                    .max()
-                    .unwrap_or(0);
+                let max_constraint_depth = calls.iter().map(|c| c.constraint_count()).max().unwrap_or(0);
 
                 // Create the full entry with caller and callees
                 let entry = json!({
@@ -155,12 +143,7 @@ impl<'tcx> CallGraph<'tcx> {
     }
 
     /// Format caller information as readable text
-    pub(crate) fn format_callers(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        target_path: &str,
-        callers: Vec<PathInfo<'tcx>>,
-    ) -> String {
+    pub(crate) fn format_callers(&self, tcx: TyCtxt<'tcx>, target_path: &str, callers: Vec<PathInfo<'tcx>>) -> String {
         let mut result = String::new();
 
         result.push_str(&format!("Callers of functions matching '{target_path}':\n"));
@@ -174,19 +157,17 @@ impl<'tcx> CallGraph<'tcx> {
             caller,
             constraints,
             package_num,
+            package_num_unique,
             path_len,
         } in &sorted_callers
         {
             let caller_name = caller.full_path(tcx, self.without_args);
             result.push_str(&format!(
-                "- {caller_name} [path constraints: {constraints}, package num: {package_num}, path len: {path_len}]\n"
+                "- {caller_name} [path constraints: {constraints}, package num: {package_num}, package num unique: {package_num_unique}, path len: {path_len}]\n"
             ));
         }
 
-        result.push_str(&format!(
-            "\nTotal: {} callers found\n",
-            sorted_callers.len()
-        ));
+        result.push_str(&format!("\nTotal: {} callers found\n", sorted_callers.len()));
         result
     }
 
@@ -208,6 +189,7 @@ impl<'tcx> CallGraph<'tcx> {
             caller,
             constraints,
             package_num,
+            package_num_unique,
             path_len,
         } in &sorted_callers
         {
@@ -225,6 +207,7 @@ impl<'tcx> CallGraph<'tcx> {
                 "path": caller_path,
                 "path_constraints": constraints,
                 "path_package_num": package_num,
+                "path_package_num_unique": package_num_unique,
                 "path_len": path_len
             }));
         }
