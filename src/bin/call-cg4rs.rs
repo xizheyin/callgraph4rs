@@ -15,7 +15,8 @@ async fn main() -> anyhow::Result<()> {
     // 获取命令行参数
     let Args {
         skip_clean,
-        _project_root_dir,
+        #[allow(unused)]
+        project_root_dir,
         manifest_path,
         args,
     } = args().await;
