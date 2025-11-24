@@ -58,10 +58,7 @@ impl BlockPath {
             constraints += 1;
         }
 
-        BlockPath {
-            blocks,
-            constraints,
-        }
+        BlockPath { blocks, constraints }
     }
 }
 

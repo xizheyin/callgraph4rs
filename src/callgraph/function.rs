@@ -72,12 +72,7 @@ pub fn collect_local_instances(tcx: ty::TyCtxt<'_>) -> Vec<FunctionInstance<'_>>
     for def_id in tcx.hir_body_owners() {
         let ty = tcx.type_of(def_id).skip_binder();
         if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
-            let instance = ty::Instance::try_resolve(
-                tcx,
-                TypingEnv::post_analysis(tcx, *def_id),
-                *def_id,
-                args,
-            );
+            let instance = ty::Instance::try_resolve(tcx, TypingEnv::post_analysis(tcx, *def_id), *def_id, args);
             if let Ok(Some(instance)) = instance {
                 instances.push(FunctionInstance::new_instance(instance));
             }

@@ -72,11 +72,7 @@ impl CGCallbacks {
 }
 
 impl rustc_driver::Callbacks for CGCallbacks {
-    fn after_analysis<'tcx>(
-        &mut self,
-        _compiler: &interface::Compiler,
-        tcx: TyCtxt<'tcx>,
-    ) -> Compilation {
+    fn after_analysis<'tcx>(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         tracing::info!("{}", "Entering after_analysis rustc_driver callback");
         callgraph::analyze_crate(tcx, &self.cg_args);
         tracing::info!("{}", "Exiting after_analysis rustc_driver callback");

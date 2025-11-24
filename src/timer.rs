@@ -77,9 +77,7 @@ impl Timer {
     /// * `name` - The name of the timer to start
     pub fn start(name: &str) {
         let mut timers = TIMER.timers.lock().unwrap();
-        let timer = timers
-            .entry(name.to_string())
-            .or_insert_with(TimerData::new);
+        let timer = timers.entry(name.to_string()).or_insert_with(TimerData::new);
 
         if timer.start_time.is_some() {
             // Timer already running
@@ -127,9 +125,7 @@ impl Timer {
     #[allow(unused)]
     pub fn record(name: &str, duration: Duration) {
         let mut timers = TIMER.timers.lock().unwrap();
-        let timer = timers
-            .entry(name.to_string())
-            .or_insert_with(TimerData::new);
+        let timer = timers.entry(name.to_string()).or_insert_with(TimerData::new);
         timer.elapsed += duration;
         timer.count += 1;
 
@@ -197,10 +193,7 @@ impl Timer {
 
         match output_file.as_ref() {
             Some(file_path) => {
-                let file = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(file_path)?;
+                let file = OpenOptions::new().create(true).append(true).open(file_path)?;
 
                 write_timers_to_file(file, &timers)
             }

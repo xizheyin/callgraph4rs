@@ -79,9 +79,7 @@ fn get_sysroot(orig_args: &[String]) -> (bool, String) {
             toolchain_path(home, toolchain)
         })
         .map(|pb| pb.to_string_lossy().to_string())
-        .expect(
-            "need to specify SYSROOT env var during clippy compilation, or use rustup or multirust",
-        );
+        .expect("need to specify SYSROOT env var during clippy compilation, or use rustup or multirust");
     (have_sys_root_arg, sys_root)
 }
 
@@ -137,8 +135,7 @@ pub fn rustc_main<T: Plugin>(plugin: T) {
         let run_plugin = !normal_rustc && (run_on_all_crates || primary_package) && is_target_crate;
 
         if run_plugin {
-            let plugin_args: T::PluginArgs =
-                serde_json::from_str(&env::var(PLUGIN_ARGS).unwrap()).unwrap();
+            let plugin_args: T::PluginArgs = serde_json::from_str(&env::var(PLUGIN_ARGS).unwrap()).unwrap();
             plugin.run(args, plugin_args);
         } else {
             rustc_driver::run_compiler(&args, &mut DefaultCallbacks);

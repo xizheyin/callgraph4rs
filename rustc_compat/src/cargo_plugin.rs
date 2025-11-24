@@ -28,10 +28,7 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
     let metadata = build_metadata_command().exec().unwrap();
 
     // 设置插件的目标目录
-    let plugin_subdir = format!(
-        "plugin-{}",
-        option_env!("RUSTC_CHANNEL").unwrap_or("default")
-    );
+    let plugin_subdir = format!("plugin-{}", option_env!("RUSTC_CHANNEL").unwrap_or("default"));
     let target_dir = metadata.target_directory.join(plugin_subdir);
 
     // 获取插件参数
@@ -184,27 +181,18 @@ fn only_run_on_file(
                 _ => {
                     // 如果有多个匹配的目标，尝试根据文件名匹配
                     let stem = file_path.file_stem().unwrap().to_string_lossy();
-                    let name_matches_stem = targets
-                        .clone()
-                        .into_iter()
-                        .find(|target| target.name == stem);
+                    let name_matches_stem = targets.clone().into_iter().find(|target| target.name == stem);
 
                     // 特殊处理 main.rs 对应的二进制目标
                     name_matches_stem.or_else(|| {
-                        let only_bin = targets
-                            .iter()
-                            .all(|target| !target.kind.contains(&"lib".into()));
+                        let only_bin = targets.iter().all(|target| !target.kind.contains(&"lib".into()));
                         if only_bin {
-                            targets
-                                .into_iter()
-                                .find(|target| target.kind.contains(&"bin".into()))
+                            targets.into_iter().find(|target| target.kind.contains(&"bin".into()))
                         } else {
                             let kind = (if stem == "main" { "bin" } else { "lib" }).to_string();
-                            targets.into_iter().find(|target| {
-                                target
-                                    .kind
-                                    .contains(&cargo_metadata::TargetKind::from(kind.as_str()))
-                            })
+                            targets
+                                .into_iter()
+                                .find(|target| target.kind.contains(&cargo_metadata::TargetKind::from(kind.as_str())))
                         }
                     })
                 }
