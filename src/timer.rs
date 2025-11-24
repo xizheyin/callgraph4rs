@@ -43,6 +43,7 @@ impl TimerData {
 pub struct Timer {
     timers: Arc<Mutex<HashMap<String, TimerData>>>,
     output_file: Arc<Mutex<Option<String>>>,
+    enabled: Arc<Mutex<bool>>,
 }
 
 impl Timer {
@@ -50,19 +51,19 @@ impl Timer {
         Self {
             timers: Arc::new(Mutex::new(HashMap::new())),
             output_file: Arc::new(Mutex::new(None)),
+            enabled: Arc::new(Mutex::new(false)),
         }
     }
 
     pub fn init(plugin_args: &CGArgs) {
-        // Set up timer output file
-        let timer_output_path = plugin_args.timer_output.clone().unwrap_or_else(|| {
-            plugin_args
-                .output_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from("./target"))
-                .join("cg_timing.txt")
-        });
-        Timer::set_output_file(timer_output_path.to_str().unwrap());
+        // Only enable when timer_output is specified
+        let mut enabled = TIMER.enabled.lock().unwrap();
+        if let Some(path) = plugin_args.timer_output.clone() {
+            *enabled = true;
+            Timer::set_output_file(path.to_str().unwrap());
+        } else {
+            *enabled = false;
+        }
     }
 
     /// Sets the output file for timer results
@@ -76,6 +77,9 @@ impl Timer {
     /// # Arguments
     /// * `name` - The name of the timer to start
     pub fn start(name: &str) {
+        if !*TIMER.enabled.lock().unwrap() {
+            return;
+        }
         let mut timers = TIMER.timers.lock().unwrap();
         let timer = timers.entry(name.to_string()).or_insert_with(TimerData::new);
 
@@ -93,6 +97,9 @@ impl Timer {
     /// # Arguments
     /// * `name` - The name of the timer to stop
     pub fn stop(name: &str) {
+        if !*TIMER.enabled.lock().unwrap() {
+            return;
+        }
         let mut timers = TIMER.timers.lock().unwrap();
 
         if let Some(timer) = timers.get_mut(name) {
@@ -124,6 +131,9 @@ impl Timer {
     /// * `duration` - The duration to record
     #[allow(unused)]
     pub fn record(name: &str, duration: Duration) {
+        if !*TIMER.enabled.lock().unwrap() {
+            return;
+        }
         let mut timers = TIMER.timers.lock().unwrap();
         let timer = timers.entry(name.to_string()).or_insert_with(TimerData::new);
         timer.elapsed += duration;
@@ -141,6 +151,9 @@ impl Timer {
     /// Writes all timer results to the configured output file
     /// If no file is configured, prints to the log instead
     pub fn write_to_file() -> Result<()> {
+        if !*TIMER.enabled.lock().unwrap() {
+            return Ok(());
+        }
         let timers = TIMER.timers.lock().unwrap();
         let output_file = TIMER.output_file.lock().unwrap();
 

@@ -14,14 +14,14 @@ use types::CallGraph;
 pub fn analyze_crate<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, args: &crate::args::CGArgs) -> CallGraph<'tcx> {
     // Collect all generic instances in the crate
     let instances: Vec<FunctionInstance<'tcx>> =
-        crate::timer::measure("collect_local_instances", || function::collect_local_instances(tcx));
+        crate::timer::measure("0collect_local_instances", || function::collect_local_instances(tcx));
 
     // Perform monomorphization analysis
     let call_graph: CallGraph<'tcx> =
-        crate::timer::measure("perform_mono_analysis", || perform_mono_analysis(tcx, instances, args));
+        crate::timer::measure("1perform_mono_analysis", || perform_mono_analysis(tcx, instances, args));
 
     // Handle find_callers_of
-    crate::timer::measure("output_find_callers_results", || {
+    crate::timer::measure("2output_find_callers_results", || {
         for target_path in &args.find_callers {
             tracing::info!("Finding callers of function: {}", target_path);
             if let Some(callers_with_constraints) = call_graph.find_callers_by_path(tcx, target_path) {

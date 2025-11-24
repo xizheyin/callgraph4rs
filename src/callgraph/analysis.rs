@@ -37,10 +37,10 @@ impl<'tcx> FunctionInstance<'tcx> {
 
         // Compute function internal constraints,
         // which is a mapping from basic block to the path from the entry block to the basic block.
-        let constraints = timer::measure("compute_constraints", || compute_shortest_paths(tcx, def_id));
+        let constraints = timer::measure("1.0.0compute_constraints", || compute_shortest_paths(tcx, def_id));
 
         // Extract function call information
-        timer::measure("extract_function_call", || {
+        timer::measure("1.0.1extract_function_call", || {
             self.extract_function_call(tcx, &def_id, constraints)
         })
     }
@@ -87,18 +87,22 @@ impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
             let before_mono_ty = func.ty(self.caller_body, self.tcx);
 
             // Perform monomorphization
-            let monod_result = monomorphize(
-                self.tcx,
-                typing_env,
-                self.caller_instance.instance().expect("instance is None"),
-                before_mono_ty,
-            );
+            let monod_result = timer::measure("1.0.1.0monomorphize", || {
+                monomorphize(
+                    self.tcx,
+                    typing_env,
+                    self.caller_instance.instance().expect("instance is None"),
+                    before_mono_ty,
+                )
+            });
 
             let callee = match monod_result {
                 Ok(monoed) => {
                     //calculate first argument type for potential dyn trait method call
                     let first_arg_ty = args.iter().next().map(|arg| arg.node.ty(self.caller_body, self.tcx));
-                    self.handle_monoed_callee(func, first_arg_ty, monoed)
+                    timer::measure("1.0.1.1handle_monoed_callee", || {
+                        self.handle_monoed_callee(func, first_arg_ty, monoed)
+                    })
                 }
                 Err(err) => self.handle_mono_error(func, before_mono_ty, err),
             };
@@ -170,9 +174,13 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     ) -> Option<FunctionInstance<'tcx>> {
         use mir::Operand::*;
         match func {
-            Constant(_) => self.handle_monod_direct_callee(func, monod_callee, first_arg_ty),
+            Constant(_) => timer::measure("1.0.1.1.0handle_monod_direct_callee", || {
+                self.handle_monod_direct_callee(func, monod_callee, first_arg_ty)
+            }),
             // Move or copy operands - 支持函数指针调用
-            Move(_) | Copy(_) => self.handle_monod_indirect_callee(func, first_arg_ty, monod_callee),
+            Move(_) | Copy(_) => timer::measure("1.0.1.1.1handle_monod_indirect_callee", || {
+                self.handle_monod_indirect_callee(func, first_arg_ty, monod_callee)
+            }),
         }
     }
 
@@ -190,9 +198,13 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                 // Such as ```
                 //  let a = func();
                 // ```
-                return self.handle_monod_fn_def_callee(first_arg_ty, monod_callee);
+                return timer::measure("1.0.1.1.0.0handle_monod_fn_def_callee", || {
+                    self.handle_monod_fn_def_callee(first_arg_ty, monod_callee)
+                });
             }
-            ty::TyKind::FnPtr(..) => self.handle_monod_fn_ptr_callee(func, monod_callee),
+            ty::TyKind::FnPtr(..) => timer::measure("1.0.1.1.0.1handle_monod_fn_ptr_callee", || {
+                self.handle_monod_fn_ptr_callee(func, monod_callee)
+            }),
             _ => tracing::warn!("skip constant (unsupported type): {:?}", monod_callee),
         }
         None
@@ -217,9 +229,13 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                 //  let b = a();
                 // ```
                 // In this case, we need to resolve the function pointer to get the actual callee.
-                return self.handle_monod_fn_def_callee(first_arg_ty, monod_callee);
+                return timer::measure("1.0.1.1.1.0handle_monod_fn_def_callee", || {
+                    self.handle_monod_fn_def_callee(first_arg_ty, monod_callee)
+                });
             }
-            ty::TyKind::FnPtr(..) => self.handle_monod_fn_ptr_callee(func, monod_callee),
+            ty::TyKind::FnPtr(..) => timer::measure("1.0.1.1.1.1handle_monod_fn_ptr_callee", || {
+                self.handle_monod_fn_ptr_callee(func, monod_callee)
+            }),
             _ => {
                 tracing::warn!("skip move or copy (unsupported type): {:?}", monod_callee);
             }
@@ -248,7 +264,9 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         let caller_def_id = self.caller_instance.def_id();
         // Use caller's typing environment for resolution
         let type_env = TypingEnv::post_analysis(self.tcx, caller_def_id);
-        let result = ty::Instance::try_resolve(self.tcx, type_env, *def_id, monoed_args);
+        let result = timer::measure("fn_def resolve_instance", || {
+            ty::Instance::try_resolve(self.tcx, type_env, *def_id, monoed_args)
+        });
 
         match result {
             Err(err) => {
@@ -260,14 +278,18 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                     if matches!(instance.def, InstanceKind::Virtual(..)) {
                         // Virtual function call!!!!!
                         info!("Found trait method call with dyn self: {:?}", monod);
-                        self.handle_dyn_trait_method_call(first_arg, *def_id);
+                        timer::measure("fn_def handle_dyn_trait_method_call", || {
+                            self.handle_dyn_trait_method_call(first_arg, *def_id)
+                        });
                     }
                     return Some(FunctionInstance::new_instance(instance));
                 } else {
                     warn!("Resolve [{:#?}] failed, trivial resolve", monod);
-                    return trivial_resolve(self.tcx, *def_id).or_else(|| {
-                        warn!("Trivial resolve [{:?}] failed, using non-instance", def_id);
-                        Some(FunctionInstance::new_non_instance(*def_id))
+                    return timer::measure("fn_def trivial_resolve", || {
+                        trivial_resolve(self.tcx, *def_id).or_else(|| {
+                            warn!("Trivial resolve [{:?}] failed, using non-instance", def_id);
+                            Some(FunctionInstance::new_non_instance(*def_id))
+                        })
                     });
                 }
             }
@@ -279,7 +301,9 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         tracing::info!("First, we try to resolve function pointer directly, func: {:?}", func);
 
         // First, we try to backtrace the local candidates from the function pointer operand.
-        let mut local_candidates = self.resolve_fnptr_local_candidates(func);
+        let mut local_candidates = timer::measure("resolve_fnptr_local_candidates", || {
+            self.resolve_fnptr_local_candidates(func)
+        });
         if !local_candidates.is_empty() {
             tracing::info!("fnptr call: found {} local cands via backtrace", local_candidates.len());
             for cand in local_candidates.drain(..) {
@@ -294,7 +318,9 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
 
         tracing::info!("Failed to precision resolve function pointer, trying resolve func ptr by sig match.");
         if let ty::TyKind::FnPtr(poly_sig, _) = monod.kind() {
-            let candidates = candidates_for_fnptr_sig(self.tcx, self.caller_instance.def_id(), *poly_sig);
+            let candidates = timer::measure("candidates_for_fnptr_sig", || {
+                candidates_for_fnptr_sig(self.tcx, self.caller_instance.def_id(), *poly_sig)
+            });
             if candidates.is_empty() {
                 tracing::warn!("fnptr call: no cands found for sig {:?}", poly_sig);
                 return;
@@ -331,10 +357,14 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             info!("Found dyn trait method: trait={:?}, method={}", tr_id, method_name);
             let candidates = if Some(tr_id) == fn_trait || Some(tr_id) == fn_mut_trait || Some(tr_id) == fn_once_trait {
                 // if trait is Fn/FnMut/FnOnce, use signature matching
-                candidates_for_dyn_fn_trait(self.tcx, &inputs, output)
+                timer::measure("candidates_for_dyn_fn_trait", || {
+                    candidates_for_dyn_fn_trait(self.tcx, &inputs, output)
+                })
             } else {
                 // for other traits, use trait method dispatch
-                candidates_for_dyn_normal_trait(self.tcx, tr_id, &method_name)
+                timer::measure("candidates_for_dyn_normal_trait", || {
+                    candidates_for_dyn_normal_trait(self.tcx, tr_id, &method_name)
+                })
             };
             info!("Found {} candidates for dyn trait method", candidates.len());
 
@@ -483,7 +513,7 @@ pub(crate) fn perform_mono_analysis<'tcx>(
     let mut discovered = HashSet::new();
 
     while let Some(instance) = call_graph.instances.pop_front() {
-        let call_sites = timer::measure("instance_callsites", || instance.collect_callsites(tcx));
+        let call_sites = timer::measure("1.0collect_callsites", || instance.collect_callsites(tcx));
 
         for call_site in call_sites {
             call_graph.call_sites.push(call_site.clone());
@@ -504,7 +534,7 @@ pub(crate) fn perform_mono_analysis<'tcx>(
     // Deduplicate call sites if deduplication is not disabled
     if !args.no_dedup {
         tracing::info!("Deduplication enabled - removing duplicate call sites");
-        timer::measure("deduplicate_call_sites", || call_graph.deduplicate_call_sites());
+        timer::measure("1.1deduplicate_call_sites", || call_graph.deduplicate_call_sites());
     } else {
         tracing::info!("Deduplication disabled - keeping all call sites");
     }
