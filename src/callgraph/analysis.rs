@@ -18,7 +18,7 @@ use rustc_middle::{
     },
 };
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 impl<'tcx> FunctionInstance<'tcx> {
     /// the entrypoint to collect all callsites in a function instance
@@ -191,7 +191,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         monod_callee: ty::Ty<'tcx>,
         first_arg_ty: Option<ty::Ty<'tcx>>,
     ) -> Option<FunctionInstance<'tcx>> {
-        tracing::info!("Found direct call {:?}, func.ty: {:?}", func, monod_callee);
+        debug!("Found direct call {:?}, func.ty: {:?}", func, monod_callee);
         match monod_callee.kind() {
             ty::TyKind::FnDef(..) => {
                 // In this case, the callee is like a direct function call or method
@@ -220,7 +220,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         first_arg_ty: Option<ty::Ty<'tcx>>,
         monod_callee: ty::Ty<'tcx>,
     ) -> Option<FunctionInstance<'tcx>> {
-        tracing::info!("Found indirect call {:?}, func.ty: {:?}", func, monod_callee);
+        debug!("Found indirect call {:?}, func.ty: {:?}", func, monod_callee);
         match monod_callee.kind() {
             ty::TyKind::FnDef(..) => {
                 // In some cases, a local variable is assigned with a function,
@@ -274,10 +274,10 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             }
             Ok(opt_instance) => {
                 if let Some(instance) = opt_instance {
-                    info!("Resolved instance successfully: {:?}", instance);
+                    debug!("Resolved instance successfully: {:?}", instance);
                     if matches!(instance.def, InstanceKind::Virtual(..)) {
                         // Virtual function call!!!!!
-                        info!("Found trait method call with dyn self: {:?}", monod);
+                        debug!("Found trait method call with dyn self: {:?}", monod);
                         timer::measure("fn_def handle_dyn_trait_method_call", || {
                             self.handle_dyn_trait_method_call(first_arg, *def_id)
                         });
@@ -298,14 +298,14 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     }
 
     fn handle_monod_fn_ptr_callee(&mut self, func: &mir::Operand<'tcx>, monod: ty::Ty<'tcx>) {
-        tracing::info!("First, we try to resolve function pointer directly, func: {:?}", func);
+        debug!("First, we try to resolve function pointer directly, func: {:?}", func);
 
         // First, we try to backtrace the local candidates from the function pointer operand.
         let mut local_candidates = timer::measure("resolve_fnptr_local_candidates", || {
             self.resolve_fnptr_local_candidates(func)
         });
         if !local_candidates.is_empty() {
-            tracing::info!("fnptr call: found {} local cands via backtrace", local_candidates.len());
+            debug!("fnptr call: found {} local cands via backtrace", local_candidates.len());
             for cand in local_candidates.drain(..) {
                 self.callees.push(CallSite::new(
                     *self.caller_instance,
@@ -316,7 +316,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             return;
         }
 
-        tracing::info!("Failed to precision resolve function pointer, trying resolve func ptr by sig match.");
+        debug!("Failed to precision resolve function pointer, trying resolve func ptr by sig match.");
         if let ty::TyKind::FnPtr(poly_sig, _) = monod.kind() {
             let candidates = timer::measure("candidates_for_fnptr_sig", || {
                 candidates_for_fnptr_sig(self.tcx, self.caller_instance.def_id(), *poly_sig)
@@ -325,7 +325,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                 tracing::warn!("fnptr call: no cands found for sig {:?}", poly_sig);
                 return;
             }
-            tracing::info!("fnptr call: found {} sig-matched cands", candidates.len());
+            debug!("fnptr call: found {} sig-matched cands", candidates.len());
             for cand in candidates {
                 self.callees.push(CallSite::new(
                     *self.caller_instance,
@@ -345,7 +345,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         first_arg: Option<ty::Ty<'tcx>>,
         def_id: DefId,
     ) -> Option<FunctionInstance<'tcx>> {
-        info!("Processing dyn trait method call: def_id={def_id:?}, first_arg={first_arg:?}");
+        debug!("Processing dyn trait method call: def_id={def_id:?}, first_arg={first_arg:?}");
         // For Fn/FnMut/FnOnce traits, use signature matching
         let li = self.tcx.lang_items();
         let fn_trait = li.fn_trait();
@@ -354,7 +354,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
 
         // 提取 trait 信息
         if let Some((tr_id, method_name, inputs, output)) = self.extract_dyn_trait_info(first_arg, def_id) {
-            info!("Found dyn trait method: trait={:?}, method={}", tr_id, method_name);
+            debug!("Found dyn trait method: trait={:?}, method={}", tr_id, method_name);
             let candidates = if Some(tr_id) == fn_trait || Some(tr_id) == fn_mut_trait || Some(tr_id) == fn_once_trait {
                 // if trait is Fn/FnMut/FnOnce, use signature matching
                 timer::measure("candidates_for_dyn_fn_trait", || {
@@ -366,7 +366,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                     candidates_for_dyn_normal_trait(self.tcx, tr_id, &method_name)
                 })
             };
-            info!("Found {} candidates for dyn trait method", candidates.len());
+            debug!("Found {} candidates for dyn trait method", candidates.len());
 
             for cand in candidates {
                 self.callees.push(CallSite::new(
