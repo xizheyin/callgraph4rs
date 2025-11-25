@@ -75,7 +75,7 @@ impl<'tcx> CallGraph<'tcx> {
             }
         }
 
-        tracing::info!(
+        tracing::debug!(
             "Deduplicated call sites: {} -> {} entries",
             self.call_sites.len(),
             deduplicated_call_sites.len()
@@ -107,7 +107,7 @@ impl<'tcx> CallGraph<'tcx> {
             return None;
         }
 
-        tracing::info!("Found {} functions matching", target_functions.len());
+        tracing::debug!("Found {} functions matching", target_functions.len());
 
         // Create mapping from callee to callers with constraint counts
         let mut callee_to_callers: HashMap<FunctionInstance<'tcx>, HashMap<FunctionInstance<'tcx>, (usize, usize)>> =
