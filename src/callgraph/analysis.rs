@@ -4,11 +4,12 @@
 
 use super::{
     controlflow::{BlockPath, compute_shortest_paths},
-    function::{FunctionInstance, iterate_all_functions},
+    function::FunctionInstance,
     types::{CallGraph, CallSite},
 };
 use crate::timer;
 
+use lazy_static::lazy_static;
 use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind, visit::Visitor},
@@ -18,11 +19,112 @@ use rustc_middle::{
     },
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use tracing::{debug, error, warn};
+
+// --- Address Taken Analysis ---
+struct AddressTakenCollector<'tcx> {
+    #[allow(dead_code)]
+    tcx: TyCtxt<'tcx>,
+    address_taken: HashSet<DefId>,
+}
+
+impl<'tcx> Visitor<'tcx> for AddressTakenCollector<'tcx> {
+    fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: mir::Location) {
+        if let TerminatorKind::Call { func, args, .. } = &terminator.kind {
+            // For direct calls, we do NOT consider the function as "address taken"
+            // purely because it's called.
+            match func {
+                mir::Operand::Constant(c) => {
+                    // If it's NOT a FnDef, visit it.
+                    // If it IS a FnDef, skip adding to address_taken.
+                    if !matches!(c.ty().kind(), ty::TyKind::FnDef(..)) {
+                        self.visit_operand(func, location);
+                    }
+                }
+                _ => self.visit_operand(func, location),
+            }
+
+            // Visit arguments - if a function is passed as an argument, it IS address taken.
+            for arg in args {
+                self.visit_operand(&arg.node, location);
+            }
+            return;
+        }
+        self.super_terminator(terminator, location);
+    }
+
+    fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, _location: mir::Location) {
+        if let mir::Operand::Constant(c) = operand {
+            if let ty::TyKind::FnDef(def_id, _) = c.ty().kind() {
+                self.address_taken.insert(*def_id);
+            }
+        }
+    }
+}
+
+fn collect_address_taken_functions<'tcx>(tcx: TyCtxt<'tcx>) -> HashSet<DefId> {
+    let mut collector = AddressTakenCollector {
+        tcx,
+        address_taken: HashSet::new(),
+    };
+
+    // Iterate all functions to collect address-taken functions
+    crate::callgraph::function::iterate_all_functions(
+        tcx,
+        |_| true,
+        |def_id| {
+            if tcx.is_mir_available(def_id) {
+                let body = tcx.optimized_mir(def_id);
+                collector.visit_body(body);
+            }
+            None::<FunctionInstance>
+        },
+    );
+
+    tracing::info!("Found {} address-taken functions", collector.address_taken.len());
+    collector.address_taken
+}
+// ------------------------------
+
+lazy_static! {
+    static ref FN_SIG_INDEX: Mutex<HashMap<(usize, String), Vec<DefId>>> = Mutex::new(HashMap::new());
+}
+
+fn sig_key<'tcx>(tcx: TyCtxt<'tcx>, inputs: &[ty::Ty<'tcx>], output: ty::Ty<'tcx>) -> (usize, String) {
+    let erased_out = tcx.erase_regions(output);
+    let mut s = String::new();
+    s.push_str(&format!("{:?}", erased_out));
+    for ty in inputs {
+        let e = tcx.erase_regions(*ty);
+        s.push('|');
+        s.push_str(&format!("{:?}", e));
+    }
+    (inputs.len(), s)
+}
+
+fn build_fn_sig_index<'tcx>(tcx: TyCtxt<'tcx>, address_taken_funcs: &HashSet<DefId>) {
+    let mut map: HashMap<(usize, String), Vec<DefId>> = HashMap::new();
+    for def_id in address_taken_funcs.iter().copied() {
+        match tcx.def_kind(def_id) {
+            def::DefKind::Fn | def::DefKind::AssocFn => {}
+            _ => continue,
+        }
+        let env = TypingEnv::post_analysis(tcx, def_id);
+        let sig = tcx.normalize_erasing_late_bound_regions(env, tcx.fn_sig(def_id).skip_binder());
+        let key = sig_key(tcx, sig.inputs(), sig.output());
+        map.entry(key).or_insert_with(Vec::new).push(def_id);
+    }
+    *FN_SIG_INDEX.lock().unwrap() = map;
+}
 
 impl<'tcx> FunctionInstance<'tcx> {
     /// the entrypoint to collect all callsites in a function instance
-    pub(crate) fn collect_callsites(&self, tcx: ty::TyCtxt<'tcx>) -> Vec<CallSite<'tcx>> {
+    pub(crate) fn collect_callsites(
+        &self,
+        tcx: ty::TyCtxt<'tcx>,
+        address_taken_funcs: &HashSet<DefId>,
+    ) -> Vec<CallSite<'tcx>> {
         let def_id = self.def_id();
 
         if self.is_non_instance() {
@@ -41,7 +143,7 @@ impl<'tcx> FunctionInstance<'tcx> {
 
         // Extract function call information
         timer::measure("1.0.1extract_function_call", || {
-            self.extract_function_call(tcx, &def_id, constraints)
+            self.extract_function_call(tcx, &def_id, constraints, address_taken_funcs)
         })
     }
 
@@ -51,9 +153,10 @@ impl<'tcx> FunctionInstance<'tcx> {
         tcx: ty::TyCtxt<'tcx>,
         caller_id: &DefId,
         constraints: HashMap<mir::BasicBlock, BlockPath>,
+        address_taken_funcs: &HashSet<DefId>,
     ) -> Vec<CallSite<'tcx>> {
         let caller_body = tcx.optimized_mir(caller_id);
-        let mut search_callees = SearchFunctionCall::new(tcx, self, caller_body, constraints);
+        let mut search_callees = SearchFunctionCall::new(tcx, self, caller_body, constraints, address_taken_funcs);
         search_callees.visit_body(caller_body);
         search_callees.callees
     }
@@ -67,6 +170,8 @@ struct SearchFunctionCall<'tcx, 'local> {
     callees: Vec<CallSite<'tcx>>,
     constraints: HashMap<mir::BasicBlock, BlockPath>,
     current_bb: mir::BasicBlock,
+    address_taken_funcs: &'local HashSet<DefId>,
+    typing_env: TypingEnv<'tcx>,
 }
 
 impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
@@ -82,8 +187,7 @@ impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
             let func_ty = func.ty(self.caller_body, self.tcx);
             tracing::debug!("Found callee: {:?}, func.ty: {:?}", func, func_ty);
 
-            let typing_env = TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
-
+            let typing_env = self.typing_env;
             let before_mono_ty = func.ty(self.caller_body, self.tcx);
 
             // Perform monomorphization
@@ -125,6 +229,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         caller_instance: &'local FunctionInstance<'tcx>,
         caller_body: &'local mir::Body<'tcx>,
         constraints: HashMap<mir::BasicBlock, BlockPath>,
+        address_taken_funcs: &'local HashSet<DefId>,
     ) -> Self {
         SearchFunctionCall {
             tcx,
@@ -133,6 +238,8 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             callees: Vec::default(),
             constraints,
             current_bb: mir::BasicBlock::from_usize(0),
+            address_taken_funcs,
+            typing_env: TypingEnv::post_analysis(tcx, caller_instance.def_id()),
         }
     }
 
@@ -319,7 +426,12 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         debug!("Failed to precision resolve function pointer, trying resolve func ptr by sig match.");
         if let ty::TyKind::FnPtr(poly_sig, _) = monod.kind() {
             let candidates = timer::measure("candidates_for_fnptr_sig", || {
-                candidates_for_fnptr_sig(self.tcx, self.caller_instance.def_id(), *poly_sig)
+                candidates_for_fnptr_sig(
+                    self.tcx,
+                    self.caller_instance.def_id(),
+                    *poly_sig,
+                    self.address_taken_funcs,
+                )
             });
             if candidates.is_empty() {
                 tracing::warn!("fnptr call: no cands found for sig {:?}", poly_sig);
@@ -358,7 +470,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             let candidates = if Some(tr_id) == fn_trait || Some(tr_id) == fn_mut_trait || Some(tr_id) == fn_once_trait {
                 // if trait is Fn/FnMut/FnOnce, use signature matching
                 timer::measure("candidates_for_dyn_fn_trait", || {
-                    candidates_for_dyn_fn_trait(self.tcx, &inputs, output)
+                    candidates_for_dyn_fn_trait(self.tcx, &inputs, output, self.address_taken_funcs)
                 })
             } else {
                 // for other traits, use trait method dispatch
@@ -509,11 +621,17 @@ pub(crate) fn perform_mono_analysis<'tcx>(
     instances: Vec<FunctionInstance<'tcx>>,
     args: &crate::args::CGArgs,
 ) -> CallGraph<'tcx> {
+    // 0. Collect all address-taken functions (RTA-like analysis)
+    let address_taken_funcs = timer::measure("0.5collect_address_taken", || collect_address_taken_functions(tcx));
+    timer::measure("0.6build_sig_index", || build_fn_sig_index(tcx, &address_taken_funcs));
+
     let mut call_graph = CallGraph::new(instances, args.without_args);
     let mut discovered = HashSet::new();
 
     while let Some(instance) = call_graph.instances.pop_front() {
-        let call_sites = timer::measure("1.0collect_callsites", || instance.collect_callsites(tcx));
+        let call_sites = timer::measure("1.0collect_callsites", || {
+            instance.collect_callsites(tcx, &address_taken_funcs)
+        });
 
         for call_site in call_sites {
             call_graph.call_sites.push(call_site.clone());
@@ -560,43 +678,25 @@ pub(crate) fn candidates_for_fnptr_sig<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller_def_id: DefId,
     sig: Binder<'tcx, ty::FnSigTys<TyCtxt<'tcx>>>,
+    address_taken_funcs: &HashSet<DefId>,
 ) -> Vec<FunctionInstance<'tcx>> {
     let sig = tcx.normalize_erasing_late_bound_regions(TypingEnv::post_analysis(tcx, caller_def_id), sig);
     let sig_inputs = sig.inputs();
     let sig_output = sig.output();
-
-    let candidates = iterate_all_functions(
-        tcx,
-        |def_id| {
-            let type_env = ty::TypingEnv::post_analysis(tcx, def_id);
-
-            let candidate_sig = tcx.normalize_erasing_late_bound_regions(type_env, tcx.fn_sig(def_id).skip_binder());
-
-            // check if the candidate function has the same number of inputs as the signature
-            if candidate_sig.inputs().len() != sig_inputs.len() {
-                return false;
-            }
-
-            // check if the candidate function has the same return type as the signature
-            let return_types_match = candidate_sig.output() == sig_output;
-            // check if the candidate function has the same input types as the signature
-            let inputs_match = candidate_sig
-                .inputs()
-                .iter()
-                .zip(sig_inputs.iter())
-                .all(|(cand_input, sig_input)| *cand_input == *sig_input);
-
-            return_types_match && inputs_match
-        },
-        |def_id| {
-            if let Some(instance) = trivial_resolve(tcx, def_id) {
-                Some(instance)
-            } else {
-                Some(FunctionInstance::new_non_instance(def_id))
-            }
-        },
-    );
-
+    let key = sig_key(tcx, sig_inputs, sig_output);
+    let map = FN_SIG_INDEX.lock().unwrap();
+    let list = map.get(&key).cloned().unwrap_or_default();
+    let mut candidates = Vec::new();
+    for def_id in list {
+        if !address_taken_funcs.contains(&def_id) {
+            continue;
+        }
+        if let Some(instance) = trivial_resolve(tcx, def_id) {
+            candidates.push(instance);
+        } else {
+            candidates.push(FunctionInstance::new_non_instance(def_id));
+        }
+    }
     tracing::debug!(
         "Found {} candidates for fnptr signature with {} inputs",
         candidates.len(),
@@ -610,54 +710,26 @@ fn candidates_for_dyn_fn_trait<'tcx>(
     tcx: TyCtxt<'tcx>,
     inputs: &[ty::Ty<'tcx>],
     output: ty::Ty<'tcx>,
+    address_taken_funcs: &HashSet<DefId>,
 ) -> Vec<FunctionInstance<'tcx>> {
-    fn types_match_ignoring_regions<'tcx>(tcx: TyCtxt<'tcx>, a: ty::Ty<'tcx>, b: ty::Ty<'tcx>) -> bool {
-        // Erase all regions for comparison to avoid lifetime mismatches in logs and equality
-        let a_erased = tcx.erase_regions(a);
-        let b_erased = tcx.erase_regions(b);
-        a_erased == b_erased
+    let key = sig_key(tcx, inputs, output);
+    let map = FN_SIG_INDEX.lock().unwrap();
+    let list = map.get(&key).cloned().unwrap_or_default();
+    let mut candidates = Vec::new();
+    for def_id in list {
+        if !address_taken_funcs.contains(&def_id) {
+            continue;
+        }
+        match tcx.def_kind(def_id) {
+            def::DefKind::Fn | def::DefKind::AssocFn => {}
+            _ => continue,
+        }
+        if let Some(instance) = trivial_resolve(tcx, def_id) {
+            candidates.push(instance);
+        } else {
+            candidates.push(FunctionInstance::new_non_instance(def_id));
+        }
     }
-
-    let candidates = iterate_all_functions(
-        tcx,
-        |def_id| {
-            // Only consider functions and associated functions
-            match tcx.def_kind(def_id) {
-                def::DefKind::Fn | def::DefKind::AssocFn => {}
-                _ => return false,
-            }
-            // tracing::info!("candidate: {}", tcx.def_path_str(def_id));
-
-            // Normalize to erase late-bound regions in the candidate signature
-            let type_env = ty::TypingEnv::post_analysis(tcx, def_id);
-            let candidate_sig = tcx.normalize_erasing_late_bound_regions(type_env, tcx.fn_sig(def_id).skip_binder());
-
-            // Inputs count must match exactly
-            if candidate_sig.inputs().len() != inputs.len() {
-                return false;
-            }
-
-            // Compare return type ignoring regions
-            let return_types_match = types_match_ignoring_regions(tcx, candidate_sig.output(), output);
-
-            // Compare each input type ignoring regions
-            let inputs_match = candidate_sig
-                .inputs()
-                .iter()
-                .zip(inputs.iter())
-                .all(|(cand_input, want_input)| types_match_ignoring_regions(tcx, *cand_input, *want_input));
-
-            return_types_match && inputs_match
-        },
-        |def_id| {
-            if let Some(instance) = trivial_resolve(tcx, def_id) {
-                Some(instance)
-            } else {
-                Some(FunctionInstance::new_non_instance(def_id))
-            }
-        },
-    );
-
     tracing::debug!(
         "Found {} candidates for dyn fn signature with {} inputs",
         candidates.len(),
