@@ -40,6 +40,110 @@ pub(crate) fn get_crate_version<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Strin
     format!("0.0.0-{}", crate_hash.to_string().split_at(8).0)
 }
 
+/// Strip generic parameters (::<...>) from a function path
+pub fn strip_generics_from_path(path: &str) -> String {
+    let mut result = String::new();
+    let mut in_generic = false;
+    let mut angle_bracket_count = 0;
+
+    let chars: Vec<(usize, char)> = path.char_indices().collect();
+
+    for (i, c) in chars {
+        if c == '<' {
+            // Check for "::<" pattern
+            let is_start_generic = !in_generic && i >= 2 && &path[i - 2..i] == "::";
+
+            if is_start_generic {
+                in_generic = true;
+                angle_bracket_count = 1;
+                // Remove the "::" that immediately precedes "<"
+                if result.ends_with("::") {
+                    let new_len = result.len() - 2;
+                    result.truncate(new_len);
+                }
+            } else if in_generic {
+                angle_bracket_count += 1;
+            } else {
+                result.push(c);
+            }
+        } else if c == '>' && in_generic {
+            angle_bracket_count -= 1;
+            if angle_bracket_count == 0 {
+                in_generic = false;
+            }
+        } else if !in_generic {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Check if a function matches the target path description
+pub fn matches_function_path<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    func: FunctionInstance<'tcx>,
+    target_path: &str,
+    without_args: bool,
+) -> bool {
+    // Get complete function path (including generic parameters)
+    let full_func_path = func.full_path(tcx, without_args);
+
+    // Also get the basic path without generic parameters
+    let base_path = match func {
+        FunctionInstance::Instance(inst) => tcx.def_path_str(inst.def_id()),
+        FunctionInstance::NonInstance(def_id) => tcx.def_path_str(def_id),
+    };
+
+    // If the target path contains '<', assume the user specified a complete path with generic parameters
+    if target_path.contains("<") {
+        // If there are angle brackets, match complete path or basic path
+        tracing::trace!("base_path: {}", base_path);
+        tracing::trace!("full_func_path: {}", full_func_path);
+        base_path.contains(target_path) || full_func_path.contains(target_path)
+    } else {
+        // If there are no angle brackets, remove all generic parameter parts from function paths
+        // Remove all ::<...> parts from base_path and full_func_path
+
+        // Clean both paths
+        let clean_base_path = strip_generics_from_path(&base_path);
+        let clean_full_path = strip_generics_from_path(&full_func_path);
+
+        tracing::trace!("clean_base_path: {}", clean_base_path);
+        tracing::trace!("clean_full_path: {}", clean_full_path);
+        // Use cleaned paths for matching
+        clean_base_path.contains(target_path) || clean_full_path.contains(target_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_generics_from_path() {
+        assert_eq!(
+            strip_generics_from_path("std::vec::Vec::<T>::new"),
+            "std::vec::Vec::new"
+        );
+        assert_eq!(
+            strip_generics_from_path("my_crate::foo::<i32, f64>::bar"),
+            "my_crate::foo::bar"
+        );
+        assert_eq!(
+            strip_generics_from_path("std::option::Option::<std::string::String>::None"),
+            "std::option::Option::None"
+        );
+        // Nested generics
+        assert_eq!(strip_generics_from_path("my::func::<Vec::<i32>>"), "my::func");
+        // No generics
+        assert_eq!(strip_generics_from_path("simple::function"), "simple::function");
+        // Edge case: :: not before <
+        assert_eq!(strip_generics_from_path("val < 5"), "val < 5");
+        // Edge case: starts with generic? (Unlikely in Rust path but good to test)
+        assert_eq!(strip_generics_from_path("::<T>"), "");
+    }
+}
+
 impl<'tcx> CallGraph<'tcx> {
     /// Deduplicate call sites, keeping only the one with the minimum constraint count
     /// for each unique caller-callee pair
@@ -255,68 +359,7 @@ impl<'tcx> CallGraph<'tcx> {
     /// Find all functions that directly or indirectly call the specified function
     pub fn find_callers_by_path(&self, tcx: TyCtxt<'tcx>, target_path: &str) -> Option<Vec<PathInfo<'tcx>>> {
         self.find_callers_by_predicate(tcx, &format!("path: {target_path}"), |func, tcx| {
-            // Get complete function path (including generic parameters)
-            let full_func_path = func.full_path(tcx, self.without_args);
-
-            // Also get the basic path without generic parameters
-            let base_path = match func {
-                FunctionInstance::Instance(inst) => tcx.def_path_str(inst.def_id()),
-                FunctionInstance::NonInstance(def_id) => tcx.def_path_str(def_id),
-            };
-
-            // If the target path contains '<', assume the user specified a complete path with generic parameters
-            if target_path.contains("<") {
-                // If there are angle brackets, match complete path or basic path
-                tracing::trace!("base_path: {}", base_path);
-                tracing::trace!("full_func_path: {}", full_func_path);
-                base_path.contains(target_path) || full_func_path.contains(target_path)
-            } else {
-                // If there are no angle brackets, remove all generic parameter parts from function paths
-                // Remove all ::<...> parts from base_path and full_func_path
-
-                // Process generic parameters in path
-                let process_path = |path: &str| -> String {
-                    let mut result = String::new();
-                    let mut in_generic = false;
-                    let mut angle_bracket_count = 0;
-                    let mut skip_from_index = 0;
-
-                    // Traverse the string, identify and remove generic parameter parts
-                    for (i, c) in path.char_indices() {
-                        if c == '<' {
-                            if !in_generic && i >= 2 && &path[i - 2..i] == "::" {
-                                // Find the starting position of generic parameters
-                                in_generic = true;
-                                angle_bracket_count = 1;
-                                skip_from_index = i - 2; // Including ::
-                                result.truncate(skip_from_index);
-                            } else if in_generic {
-                                angle_bracket_count += 1;
-                            }
-                        } else if c == '>' && in_generic {
-                            angle_bracket_count -= 1;
-                            if angle_bracket_count == 0 {
-                                // End of generic parameters
-                                in_generic = false;
-                            }
-                        } else if !in_generic && skip_from_index <= i {
-                            // Not within generic parameters, add to result
-                            result.push(c);
-                        }
-                    }
-
-                    result
-                };
-
-                // Clean both paths
-                let clean_base_path = process_path(&base_path);
-                let clean_full_path = process_path(&full_func_path);
-
-                tracing::trace!("clean_base_path: {}", clean_base_path);
-                tracing::trace!("clean_full_path: {}", clean_full_path);
-                // Use cleaned paths for matching
-                clean_base_path.contains(target_path) || clean_full_path.contains(target_path)
-            }
+            matches_function_path(tcx, func, target_path, self.without_args)
         })
     }
 }
