@@ -400,4 +400,76 @@ fn main() {
 
     println!("\n=== Fn/FnMut/FnOnce 示例 ===");
     fn_trait_example::xxmain();
+
+    println!("\n=== Unsafe Test Example ===");
+    unsafe_test::main();
+}
+
+mod unsafe_test {
+    /// Target unsafe function for RQ2 analysis
+    pub unsafe fn dangerous_operation(input: i32) -> i32 {
+        // Just a dummy unsafe function
+        println!("Executing unsafe operation with {}", input);
+        input * 2
+    }
+
+    /// Safe wrapper around unsafe function (Encapsulation depth = 1)
+    pub fn safe_wrapper(input: i32) -> i32 {
+        println!("Safe wrapper called");
+        unsafe { dangerous_operation(input) }
+    }
+
+    /// Another layer (Encapsulation depth = 2 from dangerous_operation)
+    pub fn another_layer(input: i32) -> i32 {
+        safe_wrapper(input + 1)
+    }
+
+    // --- Complex Scenarios for RQ2 ---
+
+    // 1. Recursive Unsafe Chain
+    // recursive_unsafe calls itself or is called by safe_recursive_entry
+    pub unsafe fn recursive_unsafe(n: i32) -> i32 {
+        if n <= 0 {
+            dangerous_operation(0) // Call another unsafe function
+        } else {
+            recursive_unsafe(n - 1) + 1
+        }
+    }
+
+    pub fn safe_recursive_entry(n: i32) -> i32 {
+        unsafe { recursive_unsafe(n) }
+    }
+
+    // 2. Trait Safety Violation Simulation
+    // A safe trait implemented unsafely (common pattern where implementation uses unsafe internals)
+    pub trait SafeTrait {
+        fn do_something(&self);
+    }
+
+    pub struct UnsafeImpl;
+
+    impl SafeTrait for UnsafeImpl {
+        fn do_something(&self) {
+            unsafe {
+                let _ = dangerous_operation(999);
+            }
+        }
+    }
+
+    pub fn use_trait_object(obj: &dyn SafeTrait) {
+        obj.do_something();
+    }
+
+    pub fn main() {
+        println!("Unsafe test main");
+        let res = another_layer(42);
+        println!("Result: {}", res);
+
+        println!("Recursive test:");
+        safe_recursive_entry(3);
+
+        println!("Trait test:");
+        let imp = UnsafeImpl;
+        use_trait_object(&imp);
+    }
 }

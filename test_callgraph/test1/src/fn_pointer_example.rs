@@ -52,8 +52,7 @@ fn make_op(kind: &str) -> fn(i32) -> i32 {
     match kind {
         "add" => add_one,
         "mul" => times_two,
-        "sqr" => square,
-        _ => negate,
+        _ => square,
     }
 }
 
@@ -122,7 +121,7 @@ pub fn main() {
     println!("fp(10) [square] = {}", c);
 
     // 3) 通过集合中的函数指针遍历调用
-    let ops: [fn(i32) -> i32; 4] = [add_one, times_two, square, negate];
+    let ops: [fn(i32) -> i32; 3] = [add_one, times_two, square];
     for (i, op) in ops.iter().enumerate() {
         let v = op(5);
         println!("ops[{}](5) = {}", i, v);
