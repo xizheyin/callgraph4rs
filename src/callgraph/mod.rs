@@ -2,6 +2,7 @@ mod analysis;
 mod controlflow;
 mod fmt;
 mod function;
+mod rq2;
 mod types;
 mod utils;
 
@@ -41,6 +42,11 @@ pub fn analyze_crate<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, args: &crate::ar
 
     crate::timer::measure("output_call_graph_result", || {
         output_call_graph_result(&call_graph, tcx, args)
+    });
+
+    // Perform RQ2 Analysis
+    crate::timer::measure("rq2_analysis", || {
+        rq2::analyze_safety_abstractions(&call_graph, tcx, args);
     });
 
     call_graph
