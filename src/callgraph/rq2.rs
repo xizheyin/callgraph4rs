@@ -69,7 +69,7 @@ pub fn analyze_safety_abstractions<'tcx>(call_graph: &CallGraph<'tcx>, tcx: TyCt
     }
 
     let unsafe_target_count = unsafe_targets.len();
-    let total_functions = call_graph.instances.len(); // Approximate
+    let total_functions = call_graph.total_functions;
 
     // Metric 1: Unsafe Sourcing
     // Proportion of unsafe target functions

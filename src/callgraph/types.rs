@@ -6,6 +6,7 @@ pub(crate) struct CallGraph<'tcx> {
     pub(crate) instances: VecDeque<FunctionInstance<'tcx>>,
     pub(crate) call_sites: Vec<CallSite<'tcx>>,
     pub(crate) without_args: bool,
+    pub(crate) total_functions: usize,
 }
 
 impl<'tcx> CallGraph<'tcx> {
@@ -14,6 +15,7 @@ impl<'tcx> CallGraph<'tcx> {
             instances: all_generic_instances.into_iter().collect(),
             call_sites: Vec::new(),
             without_args,
+            total_functions: 0,
         }
     }
 }

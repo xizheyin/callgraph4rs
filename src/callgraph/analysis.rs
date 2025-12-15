@@ -629,6 +629,7 @@ pub(crate) fn perform_mono_analysis<'tcx>(
     let mut discovered = HashSet::new();
 
     while let Some(instance) = call_graph.instances.pop_front() {
+        let _ = discovered.insert(instance);
         let call_sites = timer::measure("1.0collect_callsites", || {
             instance.collect_callsites(tcx, &address_taken_funcs)
         });
@@ -643,6 +644,7 @@ pub(crate) fn perform_mono_analysis<'tcx>(
         }
     }
 
+    call_graph.total_functions = discovered.len();
     tracing::info!(
         "Analysis complete: {} instances analyzed, {} call sites found",
         discovered.len(),
