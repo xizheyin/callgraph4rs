@@ -297,22 +297,8 @@ impl<'tcx> CallGraph<'tcx> {
             kind_counts_btree.insert(k.to_string(), v);
         }
 
-        // RQ4: Unsafe Pattern Analysis
-        let unique_def_ids: HashSet<rustc_hir::def_id::DefId> = target_callees.iter().map(|f| f.def_id()).collect();
-
-        let mut total_unsafe_stats = crate::callgraph::analysis::UnsafePatternStats::default();
-        for def_id in unique_def_ids {
-            let stats = crate::callgraph::analysis::collect_unsafe_patterns(tcx, def_id);
-            total_unsafe_stats.raw_ptr_derefs += stats.raw_ptr_derefs;
-            total_unsafe_stats.ffi_calls += stats.ffi_calls;
-            total_unsafe_stats.transmutes += stats.transmutes;
-            total_unsafe_stats.union_accesses += stats.union_accesses;
-            total_unsafe_stats.inline_asm += stats.inline_asm;
-        }
-
         // Create the full result object
         let result = json!({
-            "rq4_unsafe_patterns": total_unsafe_stats,
             "target": target_path,
             "total_callers": sorted_callers.len(),
             "callers": caller_entries,
