@@ -3,7 +3,7 @@ use crate::callgraph::types::PathInfo;
 use crate::callgraph::utils::get_crate_version;
 use rustc_middle::ty::TyCtxt;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -159,6 +159,7 @@ impl<'tcx> CallGraph<'tcx> {
             package_num,
             package_num_unique,
             path_len,
+            ..
         } in &sorted_callers
         {
             let caller_name = caller.full_path(tcx, self.without_args);
@@ -191,6 +192,9 @@ impl<'tcx> CallGraph<'tcx> {
             package_num,
             package_num_unique,
             path_len,
+            dyn_edges,
+            fnptr_edges,
+            generic_args_len_sum,
         } in &sorted_callers
         {
             let caller_name = caller.full_path(tcx, self.without_args);
@@ -208,15 +212,121 @@ impl<'tcx> CallGraph<'tcx> {
                 "path_constraints": constraints,
                 "path_package_num": package_num,
                 "path_package_num_unique": package_num_unique,
-                "path_len": path_len
+                "path_len": path_len,
+                "path_dyn_edges": dyn_edges,
+                "path_fnptr_edges": fnptr_edges,
+                "path_generic_args_len_sum": generic_args_len_sum
             }));
+        }
+
+        // Compute aggregated path-level RQ3 metrics
+        let mut dyn_ratio_sum = 0.0;
+        let mut gen_args_per_edge_sum = 0.0;
+        let mut denom = 0usize;
+        for pi in &sorted_callers {
+            if pi.path_len > 0 {
+                dyn_ratio_sum += (pi.dyn_edges + pi.fnptr_edges) as f64 / pi.path_len as f64;
+                gen_args_per_edge_sum += if pi.path_len > 0 {
+                    pi.generic_args_len_sum as f64 / pi.path_len as f64
+                } else {
+                    0.0
+                };
+                denom += 1;
+            }
+        }
+        let path_dyn_ratio_avg = if denom == 0 { 0.0 } else { dyn_ratio_sum / denom as f64 };
+        let path_generic_args_avg = if denom == 0 {
+            0.0
+        } else {
+            gen_args_per_edge_sum / denom as f64
+        };
+
+        // RQ3: Generics & instantiation metrics for target functions
+        let mut target_callees: HashSet<FunctionInstance<'tcx>> = HashSet::new();
+        let mut kind_counts: HashMap<&'static str, usize> = HashMap::new();
+        for cs in &self.call_sites {
+            if crate::callgraph::utils::matches_function_path(tcx, cs.callee(), target_path, self.without_args) {
+                target_callees.insert(cs.callee());
+                let k = match cs.call_kind() {
+                    crate::callgraph::types::CallKind::Direct => "Direct",
+                    crate::callgraph::types::CallKind::FnPtr => "FnPtr",
+                    crate::callgraph::types::CallKind::DynTrait => "DynTrait",
+                };
+                *kind_counts.entry(k).or_default() += 1;
+            }
+        }
+        let variants_count = target_callees.len();
+        let unique_def_ids_count = {
+            let mut s: HashSet<rustc_hir::def_id::DefId> = HashSet::new();
+            for f in &target_callees {
+                s.insert(f.def_id());
+            }
+            s.len()
+        };
+        // variants per def histogram
+        let mut per_def_counts: HashMap<rustc_hir::def_id::DefId, usize> = HashMap::new();
+        for f in &target_callees {
+            *per_def_counts.entry(f.def_id()).or_default() += 1;
+        }
+        let mut variants_per_def_hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        for (_def, cnt) in per_def_counts.iter() {
+            *variants_per_def_hist.entry(*cnt).or_default() += 1;
+        }
+        // unique callee crates
+        let mut callee_crates: HashSet<rustc_hir::def_id::CrateNum> = HashSet::new();
+        for f in &target_callees {
+            callee_crates.insert(f.def_id().krate);
+        }
+        let variant_crates_unique_count = callee_crates.len();
+        let mut generic_len_hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        let mut generic_nonzero = 0usize;
+        for f in &target_callees {
+            let len = f.instance().map(|inst| inst.args.len()).unwrap_or(0);
+            *generic_len_hist.entry(len).or_default() += 1;
+            if len > 0 {
+                generic_nonzero += 1;
+            }
+        }
+        let generic_variant_ratio = if variants_count == 0 {
+            0.0
+        } else {
+            generic_nonzero as f64 / variants_count as f64
+        };
+        let mut kind_counts_btree: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for (k, v) in kind_counts.into_iter() {
+            kind_counts_btree.insert(k.to_string(), v);
+        }
+
+        // RQ4: Unsafe Pattern Analysis
+        let unique_def_ids: HashSet<rustc_hir::def_id::DefId> = target_callees.iter().map(|f| f.def_id()).collect();
+
+        let mut total_unsafe_stats = crate::callgraph::analysis::UnsafePatternStats::default();
+        for def_id in unique_def_ids {
+            let stats = crate::callgraph::analysis::collect_unsafe_patterns(tcx, def_id);
+            total_unsafe_stats.raw_ptr_derefs += stats.raw_ptr_derefs;
+            total_unsafe_stats.ffi_calls += stats.ffi_calls;
+            total_unsafe_stats.transmutes += stats.transmutes;
+            total_unsafe_stats.union_accesses += stats.union_accesses;
+            total_unsafe_stats.inline_asm += stats.inline_asm;
         }
 
         // Create the full result object
         let result = json!({
+            "rq4_unsafe_patterns": total_unsafe_stats,
             "target": target_path,
             "total_callers": sorted_callers.len(),
-            "callers": caller_entries
+            "callers": caller_entries,
+            "rq3_generics": {
+                "target_variants_count": variants_count,
+                "target_unique_def_ids_count": unique_def_ids_count,
+                "variants_per_def_histogram": variants_per_def_hist,
+                "variant_crates_unique_count": variant_crates_unique_count,
+                "generic_variant_ratio": generic_variant_ratio,
+                "generic_args_len_histogram": generic_len_hist,
+                "call_kind_counts": kind_counts_btree,
+                "path_dyn_ratio_avg": path_dyn_ratio_avg,
+                "path_generic_args_avg": path_generic_args_avg
+            }
         });
 
         // Format as pretty-printed JSON

@@ -5,7 +5,7 @@
 use super::{
     controlflow::{BlockPath, compute_shortest_paths},
     function::FunctionInstance,
-    types::{CallGraph, CallSite},
+    types::{CallGraph, CallKind, CallSite},
 };
 use crate::timer;
 
@@ -61,6 +61,89 @@ impl<'tcx> Visitor<'tcx> for AddressTakenCollector<'tcx> {
             }
         }
     }
+}
+
+// --- RQ4: Unsafe Pattern Analysis ---
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct UnsafePatternStats {
+    pub raw_ptr_derefs: usize,
+    pub ffi_calls: usize,
+    pub transmutes: usize,
+    pub union_accesses: usize,
+    pub inline_asm: usize,
+}
+
+struct UnsafePatternCollector<'tcx, 'a> {
+    tcx: TyCtxt<'tcx>,
+    body: &'a mir::Body<'tcx>,
+    stats: UnsafePatternStats,
+}
+
+impl<'tcx, 'a> Visitor<'tcx> for UnsafePatternCollector<'tcx, 'a> {
+    fn visit_place(&mut self, place: &mir::Place<'tcx>, _context: mir::visit::PlaceContext, _location: mir::Location) {
+        let mut place_ty = mir::Place::from(place.local).ty(self.body, self.tcx);
+
+        for elem in place.projection {
+            match elem {
+                mir::ProjectionElem::Deref => {
+                    if place_ty.ty.is_unsafe_ptr() {
+                        self.stats.raw_ptr_derefs += 1;
+                    }
+                }
+                mir::ProjectionElem::Field(..) => {
+                    if place_ty.ty.is_union() {
+                        self.stats.union_accesses += 1;
+                    }
+                }
+                _ => {}
+            }
+            place_ty = place_ty.projection_ty(self.tcx, elem);
+        }
+    }
+
+    fn visit_terminator(&mut self, terminator: &mir::Terminator<'tcx>, _location: mir::Location) {
+        match &terminator.kind {
+            mir::TerminatorKind::Call { func, .. } => {
+                let func_ty = func.ty(self.body, self.tcx);
+                if let ty::FnDef(def_id, _) = func_ty.kind() {
+                    let fn_sig = self.tcx.fn_sig(*def_id).skip_binder();
+                    // Check for FFI (Foreign Function Interface)
+                    // We check if the ABI is C or System, AND if it's a foreign item (defined in extern block)
+                    if (fn_sig.abi() == rustc_target::spec::abi::Abi::C
+                        || fn_sig.abi() == rustc_target::spec::abi::Abi::System)
+                        && self.tcx.is_foreign_item(*def_id)
+                    {
+                        self.stats.ffi_calls += 1;
+                    }
+
+                    // Check for transmute (intrinsic)
+                    if self.tcx.is_intrinsic(*def_id) && self.tcx.item_name(*def_id).as_str() == "transmute" {
+                        self.stats.transmutes += 1;
+                    }
+                }
+            }
+            mir::TerminatorKind::InlineAsm { .. } => {
+                self.stats.inline_asm += 1;
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn collect_unsafe_patterns<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> UnsafePatternStats {
+    let mut stats = UnsafePatternStats::default();
+    if tcx.is_mir_available(def_id) {
+        let body = tcx.optimized_mir(def_id);
+        let mut collector = UnsafePatternCollector {
+            tcx,
+            body,
+            stats: UnsafePatternStats::default(),
+        };
+        collector.visit_body(body);
+        stats = collector.stats;
+    }
+    stats
 }
 
 fn collect_address_taken_functions<'tcx>(tcx: TyCtxt<'tcx>) -> HashSet<DefId> {
@@ -414,10 +497,11 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         if !local_candidates.is_empty() {
             debug!("fnptr call: found {} local cands via backtrace", local_candidates.len());
             for cand in local_candidates.drain(..) {
-                self.callees.push(CallSite::new(
+                self.callees.push(CallSite::new_with_kind(
                     *self.caller_instance,
                     cand,
                     self.constraints[&self.current_bb].constraints,
+                    CallKind::FnPtr,
                 ));
             }
             return;
@@ -439,10 +523,11 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             }
             debug!("fnptr call: found {} sig-matched cands", candidates.len());
             for cand in candidates {
-                self.callees.push(CallSite::new(
+                self.callees.push(CallSite::new_with_kind(
                     *self.caller_instance,
                     cand,
                     self.constraints[&self.current_bb].constraints,
+                    CallKind::FnPtr,
                 ));
             }
         }
@@ -481,10 +566,11 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             debug!("Found {} candidates for dyn trait method", candidates.len());
 
             for cand in candidates {
-                self.callees.push(CallSite::new(
+                self.callees.push(CallSite::new_with_kind(
                     *self.caller_instance,
                     cand,
                     self.constraints[&self.current_bb].constraints,
+                    CallKind::DynTrait,
                 ));
             }
         } else {

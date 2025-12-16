@@ -213,9 +213,15 @@ impl<'tcx> CallGraph<'tcx> {
 
         tracing::debug!("Found {} functions matching", target_functions.len());
 
-        // Create mapping from callee to callers with constraint counts
-        let mut callee_to_callers: HashMap<FunctionInstance<'tcx>, HashMap<FunctionInstance<'tcx>, (usize, usize)>> =
-            HashMap::new();
+        // Create mapping from callee to callers with edge attributes
+        // (constraints, package_num, call_kind, generic_args_len)
+        let mut callee_to_callers: HashMap<
+            FunctionInstance<'tcx>,
+            HashMap<
+                FunctionInstance<'tcx>,
+                (usize, usize, crate::callgraph::types::CallKind, usize),
+            >,
+        > = HashMap::new();
 
         for call_site in &self.call_sites {
             let caller = call_site.caller();
@@ -223,17 +229,21 @@ impl<'tcx> CallGraph<'tcx> {
             let constraints = call_site.constraint_count();
             let package_num = call_site.package_num();
 
+            let call_kind = call_site.call_kind();
+            let generic_len = callee.instance().map(|inst| inst.args.len()).unwrap_or(0);
             callee_to_callers
                 .entry(callee)
                 .or_default()
                 .entry(caller)
-                .and_modify(|(c, p)| {
+                .and_modify(|(c, p, k, g)| {
                     if constraints < *c {
                         *c = constraints;
                         *p = package_num;
+                        *k = call_kind;
+                        *g = generic_len;
                     }
                 })
-                .or_insert((constraints, package_num));
+                .or_insert((constraints, package_num, call_kind, generic_len));
         }
 
         // 使用 Dijkstra 算法查找所有直接或间接调用者的最短约束路径
@@ -244,6 +254,9 @@ impl<'tcx> CallGraph<'tcx> {
             package_sum: usize,
             package_unique: HashSet<CrateNum>,
             depth: usize,
+            dyn_edges: usize,
+            fnptr_edges: usize,
+            generic_args_len_sum: usize,
         }
 
         impl<'tcx> Eq for State<'tcx> {}
@@ -267,17 +280,21 @@ impl<'tcx> CallGraph<'tcx> {
             }
         }
 
-        let mut dist: HashMap<FunctionInstance<'tcx>, (usize, usize, usize, usize)> = HashMap::new();
+        let mut dist: HashMap<FunctionInstance<'tcx>, (usize, usize, usize, usize, usize, usize, usize)> =
+            HashMap::new();
         let mut heap: BinaryHeap<State<'tcx>> = BinaryHeap::new();
 
         for target in &target_functions {
-            dist.insert(*target, (0, 0, 0, 0));
+            dist.insert(*target, (0, 0, 0, 0, 0, 0, 0));
             heap.push(State {
                 cost: 0,
                 node: *target,
                 package_sum: 0,
                 package_unique: HashSet::new(),
                 depth: 0,
+                dyn_edges: 0,
+                fnptr_edges: 0,
+                generic_args_len_sum: 0,
             });
         }
 
@@ -287,12 +304,15 @@ impl<'tcx> CallGraph<'tcx> {
             package_sum: cur_pkg,
             package_unique: cur_pkg_unique,
             depth: cur_depth,
+            dyn_edges: cur_dyn,
+            fnptr_edges: cur_fnptr,
+            generic_args_len_sum: cur_genlen,
         }) = heap.pop()
         {
             // skip if the current cost is worse than the best known
             // FIXME: non-negative weights, we can use visited set to skip
             // but current version is more general
-            if let Some((best, _, _, _)) = dist.get(&cur_node) {
+            if let Some((best, _, _, _, _, _, _)) = dist.get(&cur_node) {
                 if cur_cost > *best {
                     continue;
                 }
@@ -300,18 +320,32 @@ impl<'tcx> CallGraph<'tcx> {
 
             // Find all caller
             if let Some(callers) = callee_to_callers.get(&cur_node) {
-                for (caller, (edge_cost, edge_pkg)) in callers {
+                for (caller, (edge_cost, edge_pkg, edge_kind, edge_genlen)) in callers {
                     let next_cost = cur_cost + edge_cost;
 
                     match dist.get(caller) {
-                        Some((best, _, _, _)) if next_cost >= *best => {}
+                        Some((best, _, _, _, _, _, _)) if next_cost >= *best => {}
                         _ => {
                             let next_pkg = cur_pkg + edge_pkg;
                             let next_depth = cur_depth + 1;
                             let mut next_package_unique = cur_pkg_unique.clone();
                             next_package_unique.insert(caller.def_id().krate);
+                            let next_dyn = cur_dyn + if matches!(edge_kind, crate::callgraph::types::CallKind::DynTrait) { 1 } else { 0 };
+                            let next_fnptr = cur_fnptr + if matches!(edge_kind, crate::callgraph::types::CallKind::FnPtr) { 1 } else { 0 };
+                            let next_genlen = cur_genlen + edge_genlen;
                             // Update the best path if a shorter one is found
-                            dist.insert(*caller, (next_cost, next_pkg, next_package_unique.len(), next_depth));
+                            dist.insert(
+                                *caller,
+                                (
+                                    next_cost,
+                                    next_pkg,
+                                    next_package_unique.len(),
+                                    next_depth,
+                                    next_dyn,
+                                    next_fnptr,
+                                    next_genlen,
+                                ),
+                            );
 
                             heap.push(State {
                                 cost: next_cost,
@@ -319,6 +353,9 @@ impl<'tcx> CallGraph<'tcx> {
                                 package_sum: next_pkg,
                                 package_unique: next_package_unique,
                                 depth: next_depth,
+                                dyn_edges: next_dyn,
+                                fnptr_edges: next_fnptr,
+                                generic_args_len_sum: next_genlen,
                             });
                         }
                     }
@@ -327,10 +364,11 @@ impl<'tcx> CallGraph<'tcx> {
         }
 
         // filter out the target functions
-        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize, usize, usize)> = HashMap::new();
-        for (func, (constraints, package_num, package_unique, path_len)) in dist {
+        let mut all_callers: HashMap<FunctionInstance<'tcx>, (usize, usize, usize, usize, usize, usize, usize)> =
+            HashMap::new();
+        for (func, (constraints, package_num, package_unique, path_len, dyn_edges, fnptr_edges, genlen_sum)) in dist {
             if !target_functions.contains(&func) {
-                all_callers.insert(func, (constraints, package_num, package_unique, path_len));
+                all_callers.insert(func, (constraints, package_num, package_unique, path_len, dyn_edges, fnptr_edges, genlen_sum));
             }
         }
 
@@ -343,15 +381,16 @@ impl<'tcx> CallGraph<'tcx> {
             all_callers
                 .into_iter()
                 .filter(|(caller, _)| caller.def_id().is_local())
-                .map(
-                    |(caller, (constraints, package_num, package_num_unique, path_len))| PathInfo {
-                        caller,
-                        constraints,
-                        package_num,
-                        package_num_unique,
-                        path_len,
-                    },
-                )
+                .map(|(caller, (constraints, package_num, package_num_unique, path_len, dyn_edges, fnptr_edges, genlen_sum))| PathInfo {
+                    caller,
+                    constraints,
+                    package_num,
+                    package_num_unique,
+                    path_len,
+                    dyn_edges,
+                    fnptr_edges,
+                    generic_args_len_sum: genlen_sum,
+                })
                 .collect(),
         )
     }

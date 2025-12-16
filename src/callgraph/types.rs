@@ -26,6 +26,14 @@ pub struct CallSite<'tcx> {
     caller: FunctionInstance<'tcx>,
     callee: FunctionInstance<'tcx>,
     constraint_cnt: usize,
+    call_kind: CallKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallKind {
+    Direct,
+    FnPtr,
+    DynTrait,
 }
 
 impl<'tcx> CallSite<'tcx> {
@@ -35,6 +43,22 @@ impl<'tcx> CallSite<'tcx> {
             caller,
             callee,
             constraint_cnt: constraint_count,
+            call_kind: CallKind::Direct,
+        }
+    }
+
+    /// Create a new CallSite with specific call kind
+    pub fn new_with_kind(
+        caller: FunctionInstance<'tcx>,
+        callee: FunctionInstance<'tcx>,
+        constraint_count: usize,
+        call_kind: CallKind,
+    ) -> Self {
+        Self {
+            caller,
+            callee,
+            constraint_cnt: constraint_count,
+            call_kind,
         }
     }
 
@@ -60,6 +84,10 @@ impl<'tcx> CallSite<'tcx> {
             1
         }
     }
+
+    pub fn call_kind(&self) -> CallKind {
+        self.call_kind
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +97,9 @@ pub(crate) struct PathInfo<'tcx> {
     pub(crate) package_num: usize,
     pub(crate) package_num_unique: usize,
     pub(crate) path_len: usize,
+    pub(crate) dyn_edges: usize,
+    pub(crate) fnptr_edges: usize,
+    pub(crate) generic_args_len_sum: usize,
 }
 
 impl<'tcx> PartialOrd for PathInfo<'tcx> {
