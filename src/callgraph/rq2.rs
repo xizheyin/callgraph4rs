@@ -232,7 +232,8 @@ pub fn analyze_safety_abstractions<'tcx>(call_graph: &CallGraph<'tcx>, tcx: TyCt
             },
             "encapsulation_depth": {
                 "average_depth": avg_encapsulation_depth,
-                "max_depth": max_encapsulation_depth
+                "max_depth": max_encapsulation_depth,
+                "total_boundaries_found": total_boundaries_found
             },
             "propagation_statistics": {
                 "total_paths_analyzed": prop_path_count,

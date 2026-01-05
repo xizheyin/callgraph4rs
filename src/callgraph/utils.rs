@@ -194,7 +194,7 @@ impl<'tcx> CallGraph<'tcx> {
         tcx: TyCtxt<'tcx>,
         target_description: &str,
         predicate: F,
-    ) -> Option<Vec<PathInfo<'tcx>>>
+    ) -> Vec<PathInfo<'tcx>>
     where
         F: Fn(FunctionInstance<'tcx>, TyCtxt<'tcx>) -> bool,
     {
@@ -208,7 +208,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         if target_functions.is_empty() {
             tracing::warn!("No function found matching {}", target_description);
-            return None;
+            return Vec::new();
         }
 
         tracing::debug!("Found {} functions matching", target_functions.len());
@@ -372,31 +372,30 @@ impl<'tcx> CallGraph<'tcx> {
             }
         }
 
-        if all_callers.is_empty() {
+        let paths: Vec<PathInfo<'tcx>> = all_callers
+            .into_iter()
+            .filter(|(caller, _)| caller.def_id().is_local())
+            .map(|(caller, (constraints, package_num, package_num_unique, path_len, dyn_edges, fnptr_edges, genlen_sum))| PathInfo {
+                caller,
+                constraints,
+                package_num,
+                package_num_unique,
+                path_len,
+                dyn_edges,
+                fnptr_edges,
+                generic_args_len_sum: genlen_sum,
+            })
+            .collect();
+
+        if paths.is_empty() {
             tracing::warn!("No callers found for {}", target_description);
-            return None;
         }
 
-        Some(
-            all_callers
-                .into_iter()
-                .filter(|(caller, _)| caller.def_id().is_local())
-                .map(|(caller, (constraints, package_num, package_num_unique, path_len, dyn_edges, fnptr_edges, genlen_sum))| PathInfo {
-                    caller,
-                    constraints,
-                    package_num,
-                    package_num_unique,
-                    path_len,
-                    dyn_edges,
-                    fnptr_edges,
-                    generic_args_len_sum: genlen_sum,
-                })
-                .collect(),
-        )
+        paths
     }
 
     /// Find all functions that directly or indirectly call the specified function
-    pub fn find_callers_by_path(&self, tcx: TyCtxt<'tcx>, target_path: &str) -> Option<Vec<PathInfo<'tcx>>> {
+    pub fn find_callers_by_path(&self, tcx: TyCtxt<'tcx>, target_path: &str) -> Vec<PathInfo<'tcx>> {
         self.find_callers_by_predicate(tcx, &format!("path: {target_path}"), |func, tcx| {
             matches_function_path(tcx, func, target_path, self.without_args)
         })

@@ -25,18 +25,17 @@ pub fn analyze_crate<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, args: &crate::ar
     crate::timer::measure("2output_find_callers_results", || {
         for target_path in &args.find_callers {
             tracing::debug!("Finding callers of function: {}", target_path);
-            if let Some(callers_with_constraints) = call_graph.find_callers_by_path(tcx, target_path) {
-                crate::timer::measure("output_callers_result", || {
-                    output_callers_result(
-                        &call_graph,
-                        tcx,
-                        target_path,
-                        callers_with_constraints,
-                        args,
-                        &format!("callers-{target_path}"),
-                    )
-                });
-            }
+            let callers_with_constraints = call_graph.find_callers_by_path(tcx, target_path);
+            crate::timer::measure("output_callers_result", || {
+                output_callers_result(
+                    &call_graph,
+                    tcx,
+                    target_path,
+                    callers_with_constraints,
+                    args,
+                    &format!("callers-{target_path}"),
+                )
+            });
         }
     });
 
