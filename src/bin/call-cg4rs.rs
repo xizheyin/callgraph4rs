@@ -1,5 +1,6 @@
 use std::env;
 use std::path::{Path, PathBuf};
+use tokio::fs as tokio_fs;
 use tokio::process::Command;
 use toml::Value as TomlValue;
 
@@ -117,39 +118,65 @@ fn toolchain_channel_from_embedded() -> Option<String> {
 }
 
 async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::Result<()> {
-    if !skip_clean {
-        tracing::trace!("Start to cargo clean.");
-
-        // 收集clean命令的参数
-        let mut clean_args: Vec<String> = Vec::new();
-        if let Some(tc) = toolchain_channel_from_embedded() {
-            clean_args.push(format!("+{}", tc));
-        }
-        clean_args.push("clean".to_string());
-
-        // 添加manifest-path参数
-        if let Some(path) = &manifest_path {
-            clean_args.push(format!("--manifest-path={}", path.display()));
-        }
-
-        println!("Executing: cargo {}", clean_args.join(" "));
-
-        // 一次性传递所有参数，使用 tokio 异步执行
-        let mut child = Command::new("cargo")
-            .args(clean_args)
-            .spawn()
-            .expect("Failed to execute cargo clean");
-
-        let status = child.wait().await.expect("Failed to wait for cargo clean");
-
-        if !status.success() {
-            eprintln!("cargo clean failed");
-            return Ok(());
-        }
-        tracing::trace!("Finish to cargo clean.");
-    } else {
+    if skip_clean {
         tracing::debug!("Skip to clean.");
+        return Ok(());
     }
+
+    tracing::trace!("Start to cargo clean.");
+
+    let target_dir = if let Some(mp) = manifest_path {
+        mp.parent()
+            .map(|p| p.join("target"))
+            .unwrap_or_else(|| PathBuf::from("./target"))
+    } else {
+        PathBuf::from("./target")
+    };
+
+    if !target_dir.exists() {
+        return Ok(());
+    }
+
+    // use rm
+    tracing::debug!("Delete target dir directly: {}", target_dir.display());
+    match tokio_fs::remove_dir_all(&target_dir).await {
+        Ok(_) => return Ok(()),
+        Err(e) => {
+            tracing::warn!(
+                "Failed to delete target dir {}, fallback to cargo clean: {}",
+                target_dir.display(),
+                e
+            );
+        }
+    }
+
+    // 收集clean命令的参数
+    let mut clean_args: Vec<String> = Vec::new();
+    if let Some(tc) = toolchain_channel_from_embedded() {
+        clean_args.push(format!("+{}", tc));
+    }
+    clean_args.push("clean".to_string());
+
+    // 添加manifest-path参数
+    if let Some(path) = &manifest_path {
+        clean_args.push(format!("--manifest-path={}", path.display()));
+    }
+
+    println!("Executing: cargo {}", clean_args.join(" "));
+
+    // 一次性传递所有参数，使用 tokio 异步执行
+    let mut child = Command::new("cargo")
+        .args(clean_args)
+        .spawn()
+        .expect("Failed to execute cargo clean");
+
+    let status = child.wait().await.expect("Failed to wait for cargo clean");
+
+    if !status.success() {
+        eprintln!("cargo clean failed");
+        return Ok(());
+    }
+    tracing::trace!("Finish to cargo clean.");
     Ok(())
 }
 
