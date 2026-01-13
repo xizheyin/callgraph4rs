@@ -217,10 +217,7 @@ impl<'tcx> CallGraph<'tcx> {
         // (constraints, package_num, call_kind, generic_args_len)
         let mut callee_to_callers: HashMap<
             FunctionInstance<'tcx>,
-            HashMap<
-                FunctionInstance<'tcx>,
-                (usize, usize, crate::callgraph::types::CallKind, usize),
-            >,
+            HashMap<FunctionInstance<'tcx>, (usize, usize, crate::callgraph::types::CallKind, usize)>,
         > = HashMap::new();
 
         for call_site in &self.call_sites {
@@ -330,8 +327,18 @@ impl<'tcx> CallGraph<'tcx> {
                             let next_depth = cur_depth + 1;
                             let mut next_package_unique = cur_pkg_unique.clone();
                             next_package_unique.insert(caller.def_id().krate);
-                            let next_dyn = cur_dyn + if matches!(edge_kind, crate::callgraph::types::CallKind::DynTrait) { 1 } else { 0 };
-                            let next_fnptr = cur_fnptr + if matches!(edge_kind, crate::callgraph::types::CallKind::FnPtr) { 1 } else { 0 };
+                            let next_dyn = cur_dyn
+                                + if matches!(edge_kind, crate::callgraph::types::CallKind::DynTrait) {
+                                    1
+                                } else {
+                                    0
+                                };
+                            let next_fnptr = cur_fnptr
+                                + if matches!(edge_kind, crate::callgraph::types::CallKind::FnPtr) {
+                                    1
+                                } else {
+                                    0
+                                };
                             let next_genlen = cur_genlen + edge_genlen;
                             // Update the best path if a shorter one is found
                             dist.insert(
@@ -368,23 +375,39 @@ impl<'tcx> CallGraph<'tcx> {
             HashMap::new();
         for (func, (constraints, package_num, package_unique, path_len, dyn_edges, fnptr_edges, genlen_sum)) in dist {
             if !target_functions.contains(&func) {
-                all_callers.insert(func, (constraints, package_num, package_unique, path_len, dyn_edges, fnptr_edges, genlen_sum));
+                all_callers.insert(
+                    func,
+                    (
+                        constraints,
+                        package_num,
+                        package_unique,
+                        path_len,
+                        dyn_edges,
+                        fnptr_edges,
+                        genlen_sum,
+                    ),
+                );
             }
         }
 
         let paths: Vec<PathInfo<'tcx>> = all_callers
             .into_iter()
             .filter(|(caller, _)| caller.def_id().is_local())
-            .map(|(caller, (constraints, package_num, package_num_unique, path_len, dyn_edges, fnptr_edges, genlen_sum))| PathInfo {
-                caller,
-                constraints,
-                package_num,
-                package_num_unique,
-                path_len,
-                dyn_edges,
-                fnptr_edges,
-                generic_args_len_sum: genlen_sum,
-            })
+            .map(
+                |(
+                    caller,
+                    (constraints, package_num, package_num_unique, path_len, dyn_edges, fnptr_edges, genlen_sum),
+                )| PathInfo {
+                    caller,
+                    constraints,
+                    package_num,
+                    package_num_unique,
+                    path_len,
+                    dyn_edges,
+                    fnptr_edges,
+                    generic_args_len_sum: genlen_sum,
+                },
+            )
             .collect();
 
         if paths.is_empty() {

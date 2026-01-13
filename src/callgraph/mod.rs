@@ -45,7 +45,7 @@ pub fn analyze_crate<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, args: &crate::ar
 
     // Perform RQ2 Analysis
     crate::timer::measure("rq2_analysis", || {
-        rq2::analyze_safety_abstractions(&call_graph, tcx, args);
+        rq2::analyze_public_exposure(&call_graph, tcx, args);
     });
 
     call_graph
