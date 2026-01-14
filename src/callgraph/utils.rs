@@ -78,6 +78,46 @@ pub fn strip_generics_from_path(path: &str) -> String {
     result
 }
 
+fn strip_args_from_path(path: &str) -> &str {
+    match path.find('(') {
+        Some(idx) => &path[..idx],
+        None => path,
+    }
+}
+
+fn normalize_path_for_match(path: &str, without_args: bool) -> String {
+    let trimmed = path.trim();
+    let no_args = if without_args {
+        strip_args_from_path(trimmed)
+    } else {
+        trimmed
+    };
+    strip_generics_from_path(no_args)
+}
+
+fn segment_match(candidate: &str, target: &str) -> bool {
+    let cand_segs: Vec<&str> = candidate.split("::").filter(|s| !s.is_empty()).collect();
+    let targ_segs: Vec<&str> = target.split("::").filter(|s| !s.is_empty()).collect();
+
+    if targ_segs.is_empty() || cand_segs.len() < targ_segs.len() {
+        return false;
+    }
+
+    if targ_segs.len() == 1 {
+        return cand_segs
+            .last()
+            .is_some_and(|last| *last == targ_segs[0]);
+    }
+
+    for i in 0..=(cand_segs.len() - targ_segs.len()) {
+        if cand_segs[i..i + targ_segs.len()] == targ_segs[..] {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Check if a function matches the target path description
 pub fn matches_function_path<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -85,34 +125,30 @@ pub fn matches_function_path<'tcx>(
     target_path: &str,
     without_args: bool,
 ) -> bool {
-    // Get complete function path (including generic parameters)
     let full_func_path = func.full_path(tcx, without_args);
 
-    // Also get the basic path without generic parameters
     let base_path = match func {
         FunctionInstance::Instance(inst) => tcx.def_path_str(inst.def_id()),
         FunctionInstance::NonInstance(def_id) => tcx.def_path_str(def_id),
     };
 
-    // If the target path contains '<', assume the user specified a complete path with generic parameters
-    if target_path.contains("<") {
-        // If there are angle brackets, match complete path or basic path
-        tracing::trace!("base_path: {}", base_path);
-        tracing::trace!("full_func_path: {}", full_func_path);
-        base_path.contains(target_path) || full_func_path.contains(target_path)
-    } else {
-        // If there are no angle brackets, remove all generic parameter parts from function paths
-        // Remove all ::<...> parts from base_path and full_func_path
-
-        // Clean both paths
-        let clean_base_path = strip_generics_from_path(&base_path);
-        let clean_full_path = strip_generics_from_path(&full_func_path);
-
-        tracing::trace!("clean_base_path: {}", clean_base_path);
-        tracing::trace!("clean_full_path: {}", clean_full_path);
-        // Use cleaned paths for matching
-        clean_base_path.contains(target_path) || clean_full_path.contains(target_path)
+    if target_path.contains('<') && (base_path == target_path || full_func_path == target_path) {
+        return true;
     }
+
+    let clean_target = normalize_path_for_match(target_path, without_args);
+    if clean_target.is_empty() {
+        return false;
+    }
+
+    let clean_base_path = normalize_path_for_match(&base_path, true);
+    let clean_full_path = normalize_path_for_match(&full_func_path, without_args);
+
+    tracing::trace!("clean_target: {}", clean_target);
+    tracing::trace!("clean_base_path: {}", clean_base_path);
+    tracing::trace!("clean_full_path: {}", clean_full_path);
+
+    segment_match(&clean_base_path, &clean_target) || segment_match(&clean_full_path, &clean_target)
 }
 
 #[cfg(test)]
