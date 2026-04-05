@@ -1,8 +1,6 @@
 # Rust Call Graph Generator
 
-This directory contains the call graph analysis component integrated into the `rustsec-reachability` repository.
-
-It can also be used directly as a standalone tool for generating and analyzing call graphs for Rust projects.
+`callgraph4rs` is a standalone tool for generating and analyzing call graphs for Rust projects.
 
 ## Overview
 
@@ -13,7 +11,7 @@ This tool allows you to generate a call graph for your Rust project, which can h
 
 ## Installation
 
-Install `cg`, `cargo-cg`, and `call-cg4rs` by running:
+Install `cg4rs`, `cargo-cg4rs`, and `call-cg4rs` by running:
 
 ```bash
 cargo install --path .
@@ -29,8 +27,8 @@ Navigate to your project directory and run:
 call-cg4rs
 ```
 
-This will generate a call graph and save it to `./target/callgraph.txt`.
-Default `cargo clean`, you can pass `--no-clean` to off the step.
+This will generate a call graph and save it to `./target/<crate_name>-callgraph.txt`.
+By default, `call-cg4rs` removes the target project's `target` directory before analysis. Pass `--no-clean` to skip that step.
 
 ### Deduplication
 
@@ -82,10 +80,6 @@ Options:
           Output file for timing information When specified, will write detailed timing information to this file
       --cg-debug
           Enable debug mode When enabled, will print debug information
-      --count-calls
-          Generate call count statistics file (count-callgraph.txt)
-      --count-debug
-          Generate detailed call count debug file (count-callgraph-debug.txt)
       --manifest-path <MANIFEST_PATH>
           Path to the Cargo.toml file to use When specified, will use this manifest file instead of auto-detecting it
       --root-path <ROOT_PATH>
@@ -101,14 +95,14 @@ Options:
 ```bash
 cd test_directory
 call-cg4rs
-# Call graph will be available at ./target/callgraph.txt
+# Call graph will be available at ./target/<crate_name>-callgraph.txt
 ```
 
 ### Using Custom Output Directory
 
 ```bash
 call-cg4rs -o ./custom_output
-# Call graph will be available at ./custom_output/callgraph.txt
+# Call graph will be available at ./custom_output/<crate_name>-callgraph.txt
 ```
 
 ### Analyzing a Project in a Different Directory
@@ -122,12 +116,15 @@ call-cg4rs --root-path /path/to/project
 
 # Using manifest-path directly
 call-cg4rs --manifest-path /path/to/project/Cargo.toml
+
+# Equivalent form also works
+call-cg4rs --manifest-path=/path/to/project/Cargo.toml
 ```
 
 When using `--root-path`:
-- The rust-toolchain.toml file is automatically copied to the specified directory
-- All outputs (call graph, timing files, etc.) will be placed in the project's target directory
 - The manifest path is automatically set to `<ROOT_PATH>/Cargo.toml`
+- Cleanup targets `<ROOT_PATH>/target` unless you pass `--no-clean`
+- Outputs go to the analyzed project's `target` directory by default, or to `--output-dir` when specified
 
 This is especially useful for CI/CD pipelines or when analyzing multiple projects without changing directories.
 
@@ -188,7 +185,7 @@ To find all functions that directly or indirectly call a specific function:
 call-cg4rs --find-callers "std::collections::HashMap::insert"
 ```
 
-This will generate a report of all callers in `./target/callers_1.txt`. The report includes each caller function along with its path constraints count, which represents the accumulated number of control flow constraints along the shortest calling path.
+This will generate a report in `./target/callers-std::collections::HashMap::insert.txt`. The report includes each caller function along with its path constraints count, which represents the accumulated number of control flow constraints along the shortest calling path.
 
 **Multiple Targets:**
 You can specify multiple target functions by separating them with commas (no spaces):
@@ -197,7 +194,7 @@ You can specify multiple target functions by separating them with commas (no spa
 call-cg4rs --find-callers "foo,bar,baz"
 ```
 
-This will generate `callers_1.txt`, `callers_2.txt`, `callers_3.txt` for each target respectively.
+This will generate `callers-foo.txt`, `callers-bar.txt`, `callers-baz.txt` for each target respectively.
 
 You can also generate JSON reports with:
 
@@ -205,7 +202,7 @@ You can also generate JSON reports with:
 call-cg4rs --find-callers "foo,bar,baz" --json-output
 ```
 
-Each target will produce a corresponding `callers_1.json`, `callers_2.json`, etc.
+Each target will produce a corresponding `callers-foo.json`, `callers-bar.json`, etc.
 
 **Note:** Use English commas to separate multiple targets, and do not add spaces.
 
@@ -233,10 +230,7 @@ call-cg4rs --find-callers "DataStore::<Electronics>::total_value"
 The tool includes a built-in timing system that measures execution time of various components:
 
 ```bash
-# Use default timing output file (./target/cg_timing.txt)
-call-cg4rs
-
-# Specify a custom timing output file
+# Specify a timing output file
 call-cg4rs --timer-output ./my_timing_report.txt
 ```
 
@@ -290,7 +284,7 @@ This repository includes test data (`testdata`) for exercising the call graph ge
    ```bash
    call-cg4rs
    ```
-   This will generate a call graph at `./target/callgraph.txt`.
+   This will generate a call graph at `./target/test1-callgraph.txt`.
 
 5. Try finding callers of specific functions, for example:
    ```bash
@@ -325,10 +319,9 @@ If you use this tool in academic research or other publications, please cite it 
 
 ## License
 
-This component follows the repository-wide dual license:
+This project is dual-licensed under:
 
-- [Apache License 2.0](../LICENSE-APACHE)
-- [MIT License](../LICENSE-MIT)
+- [Apache License 2.0](./LICENSE-APACHE)
+- [MIT License](./LICENSE-MIT)
 
 You may choose either license at your option.
-

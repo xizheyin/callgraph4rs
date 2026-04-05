@@ -15,16 +15,26 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let Args {
         skip_clean,
-        #[allow(unused)]
         project_root_dir,
         manifest_path,
         args,
     } = args().await;
 
-    cargo_clean(skip_clean, manifest_path.as_deref()).await?;
+    cargo_clean(skip_clean, &project_root_dir, manifest_path.as_deref()).await?;
 
     cargo_cg4rs(args).await?;
     Ok(())
+}
+
+fn parse_path_flag(args: &[String], index: usize, flag: &str) -> Option<(PathBuf, usize)> {
+    let current = args.get(index)?;
+    if current == flag {
+        let value = args.get(index + 1)?;
+        return Some((PathBuf::from(value), 1));
+    }
+
+    let prefix = format!("{flag}=");
+    current.strip_prefix(&prefix).map(|value| (PathBuf::from(value), 0))
 }
 
 async fn args() -> Args {
@@ -35,14 +45,13 @@ async fn args() -> Args {
     let mut i = 0;
 
     while i < args.len() {
-        if args[i] == "--root-path" && i + 1 < args.len() {
-            root_path = Some(PathBuf::from(&args[i + 1]));
-            i += 1;
-        } else if args[i] == "--manifest-path" && i + 1 < args.len() {
-            manifest_path = Some(PathBuf::from(&args[i + 1]));
-            filtered_args.push(args[i].clone());
-            filtered_args.push(args[i + 1].clone());
-            i += 1;
+        if let Some((path, consumed_next)) = parse_path_flag(&args, i, "--root-path") {
+            root_path = Some(path);
+            i += consumed_next;
+        } else if let Some((path, consumed_next)) = parse_path_flag(&args, i, "--manifest-path") {
+            manifest_path = Some(path.clone());
+            filtered_args.push(format!("--manifest-path={}", path.display()));
+            i += consumed_next;
         } else {
             filtered_args.push(args[i].clone());
         }
@@ -64,15 +73,14 @@ async fn args() -> Args {
         env::current_dir().expect("Failed to get current directory")
     };
 
-    let has_manifest_path = manifest_path.is_some();
-
-    let mut final_args = filtered_args.clone();
-    if !has_manifest_path {
-        let manifest_path = project_root_dir.join("Cargo.toml");
-        if manifest_path.exists() {
-            final_args.push(format!("--manifest-path={}", manifest_path.display()));
+    let mut final_args = filtered_args;
+    if manifest_path.is_none() {
+        let inferred_manifest_path = project_root_dir.join("Cargo.toml");
+        if inferred_manifest_path.exists() {
+            manifest_path = Some(inferred_manifest_path.clone());
+            final_args.push(format!("--manifest-path={}", inferred_manifest_path.display()));
         } else {
-            eprintln!("Warning: Cargo.toml not found at {}", manifest_path.display());
+            eprintln!("Warning: Cargo.toml not found at {}", inferred_manifest_path.display());
         }
     }
 
@@ -108,7 +116,7 @@ fn toolchain_channel_from_embedded() -> Option<String> {
     }
 }
 
-async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::Result<()> {
+async fn cargo_clean(skip_clean: bool, project_root_dir: &Path, manifest_path: Option<&Path>) -> anyhow::Result<()> {
     if skip_clean {
         tracing::debug!("Skip to clean.");
         return Ok(());
@@ -116,13 +124,7 @@ async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::
 
     tracing::trace!("Start to cargo clean.");
 
-    let target_dir = if let Some(mp) = manifest_path {
-        mp.parent()
-            .map(|p| p.join("target"))
-            .unwrap_or_else(|| PathBuf::from("./target"))
-    } else {
-        PathBuf::from("./target")
-    };
+    let target_dir = project_root_dir.join("target");
 
     if !target_dir.exists() {
         return Ok(());
