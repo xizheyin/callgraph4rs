@@ -17,10 +17,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install Rust toolchain
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: stable
-        components: rustfmt, clippy
+        toolchain: nightly-2025-08-09
+        components: rustfmt, clippy, rust-src, rustc-dev, llvm-tools-preview
     - name: Check formatting
       run: cargo fmt --all -- --check
     - name: Run clippy
