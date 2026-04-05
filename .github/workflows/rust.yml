@@ -27,5 +27,7 @@ jobs:
     #   run: cargo clippy -- -D warnings
     - name: Build
       run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose -- --skip async_stream_fixture_produces_stable_callers_output
+    - name: Run unit and binary tests
+      run: cargo test --verbose --lib --bins
+    - name: Run doc tests
+      run: cargo test --verbose --doc
