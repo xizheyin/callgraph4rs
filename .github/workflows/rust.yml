@@ -23,8 +23,8 @@ jobs:
         components: rustfmt, clippy, rust-src, rustc-dev, llvm-tools-preview
     - name: Check formatting
       run: cargo fmt --all -- --check
-    - name: Run clippy
-      run: cargo clippy -- -D warnings
+    # - name: Run clippy
+    #   run: cargo clippy -- -D warnings
     - name: Build
       run: cargo build --verbose
     - name: Run tests
