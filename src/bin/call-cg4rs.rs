@@ -13,7 +13,6 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 获取命令行参数
     let Args {
         skip_clean,
         #[allow(unused)]
@@ -30,7 +29,6 @@ async fn main() -> anyhow::Result<()> {
 
 async fn args() -> Args {
     let args: Vec<String> = env::args().skip(1).collect();
-    // 处理root-path参数
     let mut root_path = None;
     let mut manifest_path = None;
     let mut filtered_args = Vec::new();
@@ -38,16 +36,13 @@ async fn args() -> Args {
 
     while i < args.len() {
         if args[i] == "--root-path" && i + 1 < args.len() {
-            // 形式: --root-path /path/to/repo
             root_path = Some(PathBuf::from(&args[i + 1]));
-            i += 1; // 跳过下一个参数
-        // 不将此参数传递给cargo cg4rs
+            i += 1;
         } else if args[i] == "--manifest-path" && i + 1 < args.len() {
-            // 形式: --manifest-path /path/to/repo/Cargo.toml
             manifest_path = Some(PathBuf::from(&args[i + 1]));
             filtered_args.push(args[i].clone());
             filtered_args.push(args[i + 1].clone());
-            i += 1; // 跳过下一个参数
+            i += 1;
         } else {
             filtered_args.push(args[i].clone());
         }
@@ -61,7 +56,6 @@ async fn args() -> Args {
     let project_root_dir = if let Some(path) = root_path {
         path
     } else if let Some(path) = &manifest_path {
-        // 如果提供了manifest路径，则使用其父目录
         path.parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| env::current_dir().expect("Failed to get current directory"))
@@ -70,7 +64,6 @@ async fn args() -> Args {
         env::current_dir().expect("Failed to get current directory")
     };
 
-    // 构造manifest-path（除非已经在参数中指定）
     let has_manifest_path = manifest_path.is_some();
 
     let mut final_args = filtered_args.clone();
@@ -83,10 +76,8 @@ async fn args() -> Args {
         }
     }
 
-    // 检查是否跳过clean
     let skip_clean = final_args.iter().any(|arg| arg == "--no-clean");
 
-    // 过滤掉--no-clean参数
     let args: Vec<String> = final_args.iter().filter(|&arg| arg != "--no-clean").cloned().collect();
 
     Args {
@@ -150,21 +141,18 @@ async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::
         }
     }
 
-    // 收集clean命令的参数
     let mut clean_args: Vec<String> = Vec::new();
     if let Some(tc) = toolchain_channel_from_embedded() {
         clean_args.push(format!("+{}", tc));
     }
     clean_args.push("clean".to_string());
 
-    // 添加manifest-path参数
     if let Some(path) = &manifest_path {
         clean_args.push(format!("--manifest-path={}", path.display()));
     }
 
     println!("Executing: cargo {}", clean_args.join(" "));
 
-    // 一次性传递所有参数，使用 tokio 异步执行
     let mut child = Command::new("cargo")
         .args(clean_args)
         .spawn()
@@ -181,7 +169,6 @@ async fn cargo_clean(skip_clean: bool, manifest_path: Option<&Path>) -> anyhow::
 }
 
 async fn cargo_cg4rs(args: Vec<String>) -> anyhow::Result<()> {
-    // 执行cargo cg4rs命令
     let mut cg_args: Vec<String> = Vec::new();
     if let Some(tc) = toolchain_channel_from_embedded() {
         cg_args.push(format!("+{}", tc));
@@ -194,7 +181,6 @@ async fn cargo_cg4rs(args: Vec<String>) -> anyhow::Result<()> {
     unsafe {
         std::env::set_var("RUSTFLAGS", "-Zalways-encode-mir --cap-lints allow");
     }
-    // 一次性传递所有参数，使用 tokio 异步执行
     let mut child = Command::new("cargo")
         .args(cg_args)
         .spawn()

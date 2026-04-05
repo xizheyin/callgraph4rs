@@ -1,6 +1,8 @@
 # Rust Call Graph Generator
 
-A tool for generating and analyzing call graphs for Rust projects.
+This directory contains the call graph analysis component integrated into the `rustsec-reachability` repository.
+
+It can also be used directly as a standalone tool for generating and analyzing call graphs for Rust projects.
 
 ## Overview
 
@@ -265,7 +267,7 @@ deduplicate_call_sites           | 1          | 120.43         | 120.43
 
 ## Testing
 
-This repository includes a test project (`test_callgraph`) designed to test the call graph generation capabilities. It contains a sample Rust program with complex call relationships involving traits, generics, closures, and more.
+This repository includes test data (`testdata`) for exercising the call graph generation capabilities. It contains sample Rust programs with complex call relationships involving traits, generics, closures, and more.
 
 ### Running the Test Project
 
@@ -276,7 +278,7 @@ This repository includes a test project (`test_callgraph`) designed to test the 
 
 2. Navigate to the test project directory:
    ```bash
-   cd test_callgraph
+   cd testdata/test1
    ```
 
 3. Build the test project:
@@ -304,7 +306,7 @@ This repository includes a test project (`test_callgraph`) designed to test the 
    call-cg4rs --no-dedup
    ```
 
-For detailed information about the test project structure and specific test cases, please refer to the documentation in the `test_callgraph` directory.
+For detailed information about the test data structure and specific scenarios, please refer to the documentation in the `testdata` directory.
 
 ## Citing This Project
 
@@ -323,12 +325,10 @@ If you use this tool in academic research or other publications, please cite it 
 
 ## License
 
-This project is dual-licensed under both:
+This component follows the repository-wide dual license:
 
-- [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)
-- [MIT License](https://opensource.org/licenses/MIT)
+- [Apache License 2.0](../LICENSE-APACHE)
+- [MIT License](../LICENSE-MIT)
 
 You may choose either license at your option.
-
-
 

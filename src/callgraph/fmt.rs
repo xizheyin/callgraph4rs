@@ -155,6 +155,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         for PathInfo {
             caller,
+            call_path,
             constraints,
             package_num,
             package_num_unique,
@@ -163,9 +164,15 @@ impl<'tcx> CallGraph<'tcx> {
         } in &sorted_callers
         {
             let caller_name = caller.full_path(tcx, self.without_args);
+            let call_path = call_path
+                .iter()
+                .map(|node| node.full_path(tcx, self.without_args))
+                .collect::<Vec<_>>()
+                .join(" -> ");
             result.push_str(&format!(
                 "- {caller_name} [path constraints: {constraints}, package num: {package_num}, package num unique: {package_num_unique}, path len: {path_len}]\n"
             ));
+            result.push_str(&format!("  path: {call_path}\n"));
         }
 
         result.push_str(&format!("\nTotal: {} callers found\n", sorted_callers.len()));
@@ -188,6 +195,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         for PathInfo {
             caller,
+            call_path,
             constraints,
             package_num,
             package_num_unique,
@@ -200,6 +208,10 @@ impl<'tcx> CallGraph<'tcx> {
             let caller_name = caller.full_path(tcx, self.without_args);
             let caller_def_id = caller.def_id();
             let caller_path = tcx.def_path_str(caller_def_id);
+            let call_path = call_path
+                .iter()
+                .map(|node| node.full_path(tcx, self.without_args))
+                .collect::<Vec<_>>();
 
             // Get version information
             let version = get_crate_version(tcx, caller_def_id);
@@ -213,13 +225,14 @@ impl<'tcx> CallGraph<'tcx> {
                 "path_package_num": package_num,
                 "path_package_num_unique": package_num_unique,
                 "path_len": path_len,
+                "call_path": call_path,
                 "path_dyn_edges": dyn_edges,
                 "path_fnptr_edges": fnptr_edges,
                 "path_generic_args_len_sum": generic_args_len_sum
             }));
         }
 
-        // Compute aggregated path-level RQ3 metrics
+        // Compute aggregated path-level reachability metrics
         let mut dyn_ratio_sum = 0.0;
         let mut gen_args_per_edge_sum = 0.0;
         let mut denom = 0usize;
@@ -241,7 +254,7 @@ impl<'tcx> CallGraph<'tcx> {
             gen_args_per_edge_sum / denom as f64
         };
 
-        // RQ3: Generics & instantiation metrics for target functions
+        // Reachability summary for target functions, including generic variants and call kinds
         let mut target_callees: HashSet<FunctionInstance<'tcx>> = HashSet::new();
         let mut kind_counts: HashMap<&'static str, usize> = HashMap::new();
         for cs in &self.call_sites {
@@ -251,6 +264,7 @@ impl<'tcx> CallGraph<'tcx> {
                     crate::callgraph::types::CallKind::Direct => "Direct",
                     crate::callgraph::types::CallKind::FnPtr => "FnPtr",
                     crate::callgraph::types::CallKind::DynTrait => "DynTrait",
+                    crate::callgraph::types::CallKind::Drop => "Drop",
                 };
                 *kind_counts.entry(k).or_default() += 1;
             }
@@ -302,7 +316,7 @@ impl<'tcx> CallGraph<'tcx> {
             "target": target_path,
             "total_callers": sorted_callers.len(),
             "callers": caller_entries,
-            "rq3_generics": {
+            "reachability_summary": {
                 "target_variants_count": variants_count,
                 "target_unique_def_ids_count": unique_def_ids_count,
                 "variants_per_def_histogram": variants_per_def_hist,

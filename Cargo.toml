@@ -2,12 +2,13 @@
 name = "cg4rs"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
 [workspace]
 members = [
   "rustc_compat",
 ]
-exclude = ["test_callgraph"]
+exclude = ["testdata"]
 
 [[bin]]
 name = "call-cg4rs"

@@ -104,9 +104,7 @@ fn segment_match(candidate: &str, target: &str) -> bool {
     }
 
     if targ_segs.len() == 1 {
-        return cand_segs
-            .last()
-            .is_some_and(|last| *last == targ_segs[0]);
+        return cand_segs.last().is_some_and(|last| *last == targ_segs[0]);
     }
 
     for i in 0..=(cand_segs.len() - targ_segs.len()) {
@@ -279,7 +277,7 @@ impl<'tcx> CallGraph<'tcx> {
                 .or_insert((constraints, package_num, call_kind, generic_len));
         }
 
-        // 使用 Dijkstra 算法查找所有直接或间接调用者的最短约束路径
+        // Use Dijkstra algorithm to find shortest constrained paths to all direct/indirect callers
         #[derive(Clone)]
         struct State<'tcx> {
             cost: usize,
@@ -302,7 +300,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         impl<'tcx> Ord for State<'tcx> {
             fn cmp(&self, other: &Self) -> Ordering {
-                // BinaryHeap 是最大堆，这里反转比较以实现最小堆行为
+                // BinaryHeap is max-heap, reverse comparison for min-heap behavior
                 other.cost.cmp(&self.cost)
             }
         }
@@ -315,6 +313,7 @@ impl<'tcx> CallGraph<'tcx> {
 
         let mut dist: HashMap<FunctionInstance<'tcx>, (usize, usize, usize, usize, usize, usize, usize)> =
             HashMap::new();
+        let mut next_hop: HashMap<FunctionInstance<'tcx>, FunctionInstance<'tcx>> = HashMap::new();
         let mut heap: BinaryHeap<State<'tcx>> = BinaryHeap::new();
 
         for target in &target_functions {
@@ -389,6 +388,7 @@ impl<'tcx> CallGraph<'tcx> {
                                     next_genlen,
                                 ),
                             );
+                            next_hop.insert(*caller, cur_node);
 
                             heap.push(State {
                                 cost: next_cost,
@@ -434,6 +434,7 @@ impl<'tcx> CallGraph<'tcx> {
                     caller,
                     (constraints, package_num, package_num_unique, path_len, dyn_edges, fnptr_edges, genlen_sum),
                 )| PathInfo {
+                    call_path: std::iter::successors(Some(caller), |node| next_hop.get(node).copied()).collect(),
                     caller,
                     constraints,
                     package_num,

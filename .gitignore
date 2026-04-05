@@ -1,5 +1,5 @@
 /target
 
-# 忽略下载的 crate，但保留测试目录
+# Ignore downloaded crates while keeping the test directories
 test_callgraph/*/target/
 test_callgraph/*/*.txt

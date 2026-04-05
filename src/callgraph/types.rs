@@ -34,6 +34,7 @@ pub enum CallKind {
     Direct,
     FnPtr,
     DynTrait,
+    Drop,
 }
 
 impl<'tcx> CallSite<'tcx> {
@@ -93,6 +94,7 @@ impl<'tcx> CallSite<'tcx> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PathInfo<'tcx> {
     pub(crate) caller: FunctionInstance<'tcx>,
+    pub(crate) call_path: Vec<FunctionInstance<'tcx>>,
     pub(crate) constraints: usize,
     pub(crate) package_num: usize,
     pub(crate) package_num_unique: usize,

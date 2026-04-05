@@ -9,7 +9,6 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -277,7 +276,7 @@ fn write_timers_to_file(mut file: File, timers: &HashMap<String, TimerData>) -> 
 /// The result of the function
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// #![feature(rustc_private)]
 /// use cg4rs::timer::Timer;
 ///

@@ -9,37 +9,37 @@ use std::{
     process::{exit, Command, Stdio},
 };
 
-// 环境变量常量，用于控制插件的行为
+// Environment variable constants used to control plugin behavior
 pub const RUN_ON_ALL_CRATES: &str = "RUSTC_PLUGIN_ALL_TARGETS";
 pub const SPECIFIC_CRATE: &str = "SPECIFIC_CRATE";
 pub const SPECIFIC_TARGET: &str = "SPECIFIC_TARGET";
 pub const CARGO_VERBOSE: &str = "CARGO_VERBOSE";
 
-/// 用户命令行工具的主函数
+/// Main entry point for the cargo-side CLI tool
 pub fn cargo_main<T: Plugin>(plugin: T) {
-    // 检查是否传递了版本参数 `-V`
+    // Check whether the version flag `-V` was passed
     if env::args().any(|arg| arg == "-V") {
         println!("{}\nversion={}", plugin.driver_name(), plugin.version());
         return;
     }
 
-    // 构建metadata命令并获取metadata
+    // Build and execute the metadata command
     tracing::trace!("Fetch metadata");
     let metadata = build_metadata_command().exec().unwrap();
 
-    // 设置插件的目标目录
+    // Set the plugin target directory
     let plugin_subdir = format!("plugin-{}", option_env!("RUSTC_CHANNEL").unwrap_or("default"));
     let target_dir = metadata.target_directory.join(plugin_subdir);
 
-    // 获取插件参数
+    // Collect plugin arguments
     let args = plugin.args(&target_dir);
 
-    // 创建 `cargo` 命令
+    // Create the `cargo` command
     let mut cmd = Command::new("cargo");
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
-    // 获取当前可执行文件的路径
-    // 即 dir_path/cg4rs
+    // Resolve the current executable path
+    // i.e. dir_path/cg4rs
     let mut path = env::current_exe()
         .expect("current executable path invalid")
         .with_file_name(plugin.driver_name().as_ref());
@@ -51,32 +51,32 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
             .unwrap_or_default(),
     );
 
-    // 设置环境变量和命令参数
+    // Configure environment variables and command arguments
     cmd.env("RUSTC_WORKSPACE_WRAPPER", path)
         .arg("check")
         .arg("--target-dir")
         .arg(&target_dir);
 
-    // 添加manifest-path参数（如果有）
+    // Add --manifest-path when provided
     if let Some(manifest_path) = find_manifest_path() {
         cmd.arg("--manifest-path").arg(manifest_path);
     }
 
-    // 根据环境变量设置 cargo 的输出详细程度
+    // Configure cargo verbosity from the environment
     if env::var(CARGO_VERBOSE).is_ok() {
         cmd.arg("-vv");
     } else {
         cmd.arg("-q");
     }
 
-    // 获取工作区成员
+    // Collect workspace members
     let workspace_members = metadata
         .workspace_members
         .iter()
         .map(|pkg_id| metadata.index(pkg_id))
         .collect::<Vec<_>>();
 
-    // 根据过滤器类型决定如何运行插件
+    // Decide how to run the plugin based on the filter type
     match args.filter {
         CrateFilter::CrateContainingFile(file_path) => {
             only_run_on_file(&mut cmd, file_path, &workspace_members, &target_dir);
@@ -93,12 +93,12 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
         }
     }
 
-    // 将插件参数序列化为 JSON 字符串并设置环境变量
+    // Serialize plugin arguments to JSON and pass them via the environment
     let args_str = serde_json::to_string(&args.plugin_args).unwrap();
     tracing::debug!("{PLUGIN_ARGS}={args_str}");
     cmd.env(PLUGIN_ARGS, args_str);
 
-    // 特殊处理 rustc 代码库的编译
+    // Special handling for rustc workspace builds
     if workspace_members
         .iter()
         .any(|pkg| pkg.name == PackageName::new("rustc-main".to_string()).unwrap())
@@ -106,17 +106,17 @@ pub fn cargo_main<T: Plugin>(plugin: T) {
         cmd.env("CFG_RELEASE", "");
     }
 
-    // 允许插件修改 cargo 命令
+    // Allow the plugin to modify the cargo command
     plugin.modify_cargo(&mut cmd, &args.cargo_args);
 
     tracing::info!("Start to Exec: {:?}", cmd);
-    // 执行 cargo 命令，并根据其退出状态退出程序
+    // Execute the cargo command and exit with its status
     let exit_status = cmd.status().expect("failed to wait for cargo?");
     tracing::info!("Finish to Exec {:?}", cmd);
     exit(exit_status.code().unwrap_or(-1));
 }
 
-/// 构建元数据命令
+/// Build the metadata command
 fn build_metadata_command() -> cargo_metadata::MetadataCommand {
     let mut binding = cargo_metadata::MetadataCommand::new();
     let mut cmd = binding
@@ -131,19 +131,19 @@ fn build_metadata_command() -> cargo_metadata::MetadataCommand {
     cmd.clone()
 }
 
-/// 从命令行参数查找manifest-path
+/// Find --manifest-path in command-line arguments
 fn find_manifest_path() -> Option<String> {
     let args: Vec<String> = env::args().skip(1).collect();
 
     for i in 0..args.len() {
         if args[i].starts_with("--manifest-path=") {
-            // 形式: --manifest-path=/path/to/Cargo.toml
+            // Form: --manifest-path=/path/to/Cargo.toml
             let parts: Vec<&str> = args[i].splitn(2, '=').collect();
             if parts.len() == 2 {
                 return Some(parts[1].to_string());
             }
         } else if args[i] == "--manifest-path" && i + 1 < args.len() {
-            // 形式: --manifest-path /path/to/Cargo.toml
+            // Form: --manifest-path /path/to/Cargo.toml
             return Some(args[i + 1].clone());
         }
     }
@@ -151,17 +151,17 @@ fn find_manifest_path() -> Option<String> {
     None
 }
 
-/// 仅对特定文件所在的 crate 运行插件
+/// Run the plugin only for the crate containing the target file
 fn only_run_on_file(
     cmd: &mut Command,
     file_path: PathBuf,
     workspace_members: &[&cargo_metadata::Package],
     target_dir: &Utf8Path,
 ) {
-    // 规范化文件路径，确保一致性
+    // Normalize the file path for consistent matching
     let file_path = file_path.canonicalize().unwrap();
 
-    // 查找与文件路径匹配的包和目标
+    // Find matching packages and targets for the file path
     let mut matching = workspace_members
         .iter()
         .filter_map(|pkg| {
@@ -179,11 +179,11 @@ fn only_run_on_file(
                 0 => None,
                 1 => Some(targets[0]),
                 _ => {
-                    // 如果有多个匹配的目标，尝试根据文件名匹配
+                    // When multiple targets match, try matching by file stem
                     let stem = file_path.file_stem().unwrap().to_string_lossy();
                     let name_matches_stem = targets.clone().into_iter().find(|target| target.name == stem);
 
-                    // 特殊处理 main.rs 对应的二进制目标
+                    // Special handling for main.rs binary targets
                     name_matches_stem.or_else(|| {
                         let only_bin = targets.iter().all(|target| !target.kind.contains(&"lib".into()));
                         if only_bin {
@@ -202,14 +202,14 @@ fn only_run_on_file(
         })
         .collect::<Vec<_>>();
 
-    // 确保找到唯一的匹配目标
+    // Ensure that exactly one matching target is found
     let (pkg, target) = match matching.len() {
         0 => panic!("Could not find target for path: {}", file_path.display()),
         1 => matching.remove(0),
         _ => panic!("Too many matching targets: {matching:?}"),
     };
 
-    // 设置编译过滤器，指定目标
+    // Set the compilation filter for the selected target
     cmd.arg("-p").arg(format!("{}:{}", pkg.name, pkg.version));
 
     enum CompileKind {
@@ -218,7 +218,7 @@ fn only_run_on_file(
         ProcMacro,
     }
 
-    // 根据目标类型设置编译选项
+    // Set compilation options based on the target kind
     let kind_str = &target.kind[0].to_string();
     let kind = match kind_str.as_str() {
         "lib" | "rlib" | "dylib" | "staticlib" | "cdylib" => CompileKind::Lib,
@@ -229,7 +229,7 @@ fn only_run_on_file(
 
     match kind {
         CompileKind::Lib => {
-            // 如果之前生成过库的元数据文件，删除它们以避免缓存问题
+            // Remove previously generated library metadata files to avoid cache issues
             let deps_dir = target_dir.join("debug").join("deps");
             if let Ok(entries) = fs::read_dir(deps_dir) {
                 let prefix = format!("lib{}", pkg.name.replace('-', "_"));
@@ -251,7 +251,7 @@ fn only_run_on_file(
         CompileKind::ProcMacro => {}
     }
 
-    // 设置环境变量，指定特定的 crate 和目标
+    // Set environment variables for the selected crate and target
     cmd.env(SPECIFIC_CRATE, pkg.name.replace('-', "_"));
     cmd.env(SPECIFIC_TARGET, kind_str);
 

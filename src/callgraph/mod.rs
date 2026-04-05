@@ -2,7 +2,10 @@ mod analysis;
 mod controlflow;
 mod fmt;
 mod function;
-mod rq2;
+mod origin;
+mod public_exposure;
+mod resolution;
+mod summary;
 mod types;
 mod utils;
 
@@ -43,9 +46,9 @@ pub fn analyze_crate<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, args: &crate::ar
         output_call_graph_result(&call_graph, tcx, args)
     });
 
-    // Perform RQ2 Analysis
-    crate::timer::measure("rq2_analysis", || {
-        rq2::analyze_public_exposure(&call_graph, tcx, args);
+    // Perform public exposure analysis
+    crate::timer::measure("public_exposure_analysis", || {
+        public_exposure::analyze_public_exposure(&call_graph, tcx, args);
     });
 
     call_graph

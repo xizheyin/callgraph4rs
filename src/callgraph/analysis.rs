@@ -5,118 +5,24 @@
 use super::{
     controlflow::{BlockPath, compute_shortest_paths},
     function::FunctionInstance,
+    origin::OriginTraceContext,
+    resolution::{
+        build_fn_sig_index, candidates_for_dyn_fn_trait, candidates_for_dyn_normal_trait, candidates_for_fnptr_sig,
+        collect_address_taken_functions, extract_dyn_fn_signature, extract_dyn_trait_info,
+        fallback_callable_def_id_from_ty, monomorphize, operand_fn_def, peel_dyn_from_receiver, trivial_resolve,
+    },
     types::{CallGraph, CallKind, CallSite},
 };
 use crate::timer;
 
-use lazy_static::lazy_static;
 use rustc_hir::{def, def_id::DefId};
 use rustc_middle::{
     mir::{self, Terminator, TerminatorKind, visit::Visitor},
-    ty::{
-        self, Binder, Instance, InstanceKind, TyCtxt, TypeFoldable, TypingEnv,
-        normalize_erasing_regions::NormalizationError,
-    },
+    ty::{self, InstanceKind, TypingEnv, normalize_erasing_regions::NormalizationError},
 };
+use rustc_span::source_map::Spanned;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 use tracing::{debug, error, warn};
-
-// --- Address Taken Analysis ---
-struct AddressTakenCollector<'tcx> {
-    #[allow(dead_code)]
-    tcx: TyCtxt<'tcx>,
-    address_taken: HashSet<DefId>,
-}
-
-impl<'tcx> Visitor<'tcx> for AddressTakenCollector<'tcx> {
-    fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: mir::Location) {
-        if let TerminatorKind::Call { func, args, .. } = &terminator.kind {
-            // For direct calls, we do NOT consider the function as "address taken"
-            // purely because it's called.
-            match func {
-                mir::Operand::Constant(c) => {
-                    // If it's NOT a FnDef, visit it.
-                    // If it IS a FnDef, skip adding to address_taken.
-                    if !matches!(c.ty().kind(), ty::TyKind::FnDef(..)) {
-                        self.visit_operand(func, location);
-                    }
-                }
-                _ => self.visit_operand(func, location),
-            }
-
-            // Visit arguments - if a function is passed as an argument, it IS address taken.
-            for arg in args {
-                self.visit_operand(&arg.node, location);
-            }
-            return;
-        }
-        self.super_terminator(terminator, location);
-    }
-
-    fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, _location: mir::Location) {
-        if let mir::Operand::Constant(c) = operand {
-            if let ty::TyKind::FnDef(def_id, _) = c.ty().kind() {
-                self.address_taken.insert(*def_id);
-            }
-        }
-    }
-}
-
-fn collect_address_taken_functions<'tcx>(tcx: TyCtxt<'tcx>) -> HashSet<DefId> {
-    let mut collector = AddressTakenCollector {
-        tcx,
-        address_taken: HashSet::new(),
-    };
-
-    // Iterate all functions to collect address-taken functions
-    crate::callgraph::function::iterate_all_functions(
-        tcx,
-        |_| true,
-        |def_id| {
-            if tcx.is_mir_available(def_id) {
-                let body = tcx.optimized_mir(def_id);
-                collector.visit_body(body);
-            }
-            None::<FunctionInstance>
-        },
-    );
-
-    tracing::info!("Found {} address-taken functions", collector.address_taken.len());
-    collector.address_taken
-}
-// ------------------------------
-
-lazy_static! {
-    static ref FN_SIG_INDEX: Mutex<HashMap<(usize, String), Vec<DefId>>> = Mutex::new(HashMap::new());
-}
-
-fn sig_key<'tcx>(tcx: TyCtxt<'tcx>, inputs: &[ty::Ty<'tcx>], output: ty::Ty<'tcx>) -> (usize, String) {
-    let erased_out = tcx.erase_regions(output);
-    let mut s = String::new();
-    s.push_str(&format!("{:?}", erased_out));
-    for ty in inputs {
-        let e = tcx.erase_regions(*ty);
-        s.push('|');
-        s.push_str(&format!("{:?}", e));
-    }
-    (inputs.len(), s)
-}
-
-fn build_fn_sig_index<'tcx>(tcx: TyCtxt<'tcx>, address_taken_funcs: &HashSet<DefId>) {
-    let mut map: HashMap<(usize, String), Vec<DefId>> = HashMap::new();
-    for def_id in address_taken_funcs.iter().copied() {
-        match tcx.def_kind(def_id) {
-            def::DefKind::Fn | def::DefKind::AssocFn => {}
-            _ => continue,
-        }
-        let env = TypingEnv::post_analysis(tcx, def_id);
-        let sig = tcx.normalize_erasing_late_bound_regions(env, tcx.fn_sig(def_id).skip_binder());
-        let key = sig_key(tcx, sig.inputs(), sig.output());
-        map.entry(key).or_insert_with(Vec::new).push(def_id);
-    }
-    *FN_SIG_INDEX.lock().unwrap() = map;
-}
 
 impl<'tcx> FunctionInstance<'tcx> {
     /// the entrypoint to collect all callsites in a function instance
@@ -202,10 +108,15 @@ impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
 
             let callee = match monod_result {
                 Ok(monoed) => {
-                    //calculate first argument type for potential dyn trait method call
-                    let first_arg_ty = args.iter().next().map(|arg| arg.node.ty(self.caller_body, self.tcx));
+                    let dyn_receiver = args.iter().find_map(|arg| {
+                        let operand = &arg.node;
+                        let ty = operand.ty(self.caller_body, self.tcx);
+                        peel_dyn_from_receiver(self.tcx, self.typing_env, ty).map(|_| (operand, ty))
+                    });
+                    let first_arg = dyn_receiver.map(|(operand, _)| operand);
+                    let first_arg_ty = dyn_receiver.map(|(_, ty)| ty);
                     timer::measure("1.0.1.1handle_monoed_callee", || {
-                        self.handle_monoed_callee(func, first_arg_ty, monoed)
+                        self.handle_monoed_callee(func, args, first_arg, first_arg_ty, monoed)
                     })
                 }
                 Err(err) => self.handle_mono_error(func, before_mono_ty, err),
@@ -219,6 +130,15 @@ impl<'tcx, 'local> Visitor<'tcx> for SearchFunctionCall<'tcx, 'local> {
                     self.constraints[&self.current_bb].constraints,
                 ));
             }
+        } else if let TerminatorKind::Drop { place, .. } = &terminator.kind
+            && let Some(drop_impl) = self.resolve_drop_impl(place.ty(self.caller_body, self.tcx).ty)
+        {
+            self.callees.push(CallSite::new_with_kind(
+                *self.caller_instance,
+                drop_impl,
+                self.constraints[&self.current_bb].constraints,
+                CallKind::Drop,
+            ));
         }
     }
 }
@@ -253,22 +173,25 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         before_mono_ty: ty::Ty<'tcx>,
         err: NormalizationError,
     ) -> Option<FunctionInstance<'tcx>> {
-        use mir::Operand::*;
         tracing::warn!("Monomorphization failed: {:?}", err);
-        match func {
-            Constant(_) => match before_mono_ty.kind() {
-                // Although the monomorphization failed, the function is a constant function
-                // So we can use DefId to construct non-instance function
-                ty::TyKind::FnDef(def_id, _) => {
-                    tracing::warn!("Callee {:?} is not monod, using non-instance", def_id);
-                    Some(FunctionInstance::new_non_instance(*def_id))
-                }
-                _ => None,
-            },
-            Move(_) | Copy(_) => {
-                tracing::warn!("skip move or copy: {:?}", before_mono_ty);
-                None
-            }
+        if let Some(fallback) = self.fallback_callable_on_mono_error(func, before_mono_ty) {
+            return Some(fallback);
+        }
+        tracing::warn!("No callable DefId fallback available for {:?}", before_mono_ty);
+        None
+    }
+
+    fn resolve_drop_impl(&self, place_ty: ty::Ty<'tcx>) -> Option<FunctionInstance<'tcx>> {
+        let adt = place_ty.ty_adt_def()?;
+        let destructor = adt.destructor(self.tcx)?;
+        let args = match place_ty.kind() {
+            ty::TyKind::Adt(_, args) => *args,
+            _ => ty::GenericArgs::empty(),
+        };
+
+        match ty::Instance::try_resolve(self.tcx, self.typing_env, destructor.did, args) {
+            Ok(Some(instance)) => Some(FunctionInstance::new_instance(instance)),
+            _ => Some(FunctionInstance::new_non_instance(destructor.did)),
         }
     }
 
@@ -276,17 +199,19 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     fn handle_monoed_callee(
         &mut self,
         func: &mir::Operand<'tcx>,
+        call_args: &[Spanned<mir::Operand<'tcx>>],
+        first_arg: Option<&mir::Operand<'tcx>>,
         first_arg_ty: Option<ty::Ty<'tcx>>,
         monod_callee: ty::Ty<'tcx>,
     ) -> Option<FunctionInstance<'tcx>> {
         use mir::Operand::*;
         match func {
             Constant(_) => timer::measure("1.0.1.1.0handle_monod_direct_callee", || {
-                self.handle_monod_direct_callee(func, monod_callee, first_arg_ty)
+                self.handle_monod_direct_callee(func, call_args, first_arg, monod_callee, first_arg_ty)
             }),
-            // Move or copy operands - 支持函数指针调用
+            // Move or copy operands - support function pointer calls
             Move(_) | Copy(_) => timer::measure("1.0.1.1.1handle_monod_indirect_callee", || {
-                self.handle_monod_indirect_callee(func, first_arg_ty, monod_callee)
+                self.handle_monod_indirect_callee(func, call_args, first_arg, first_arg_ty, monod_callee)
             }),
         }
     }
@@ -295,6 +220,8 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     fn handle_monod_direct_callee(
         &mut self,
         func: &mir::Operand<'tcx>,
+        call_args: &[Spanned<mir::Operand<'tcx>>],
+        first_arg: Option<&mir::Operand<'tcx>>,
         monod_callee: ty::Ty<'tcx>,
         first_arg_ty: Option<ty::Ty<'tcx>>,
     ) -> Option<FunctionInstance<'tcx>> {
@@ -306,7 +233,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                 //  let a = func();
                 // ```
                 return timer::measure("1.0.1.1.0.0handle_monod_fn_def_callee", || {
-                    self.handle_monod_fn_def_callee(first_arg_ty, monod_callee)
+                    self.handle_monod_fn_def_callee(call_args, first_arg, first_arg_ty, monod_callee)
                 });
             }
             ty::TyKind::FnPtr(..) => timer::measure("1.0.1.1.0.1handle_monod_fn_ptr_callee", || {
@@ -324,6 +251,8 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     fn handle_monod_indirect_callee(
         &mut self,
         func: &mir::Operand<'tcx>,
+        call_args: &[Spanned<mir::Operand<'tcx>>],
+        first_arg: Option<&mir::Operand<'tcx>>,
         first_arg_ty: Option<ty::Ty<'tcx>>,
         monod_callee: ty::Ty<'tcx>,
     ) -> Option<FunctionInstance<'tcx>> {
@@ -337,7 +266,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
                 // ```
                 // In this case, we need to resolve the function pointer to get the actual callee.
                 return timer::measure("1.0.1.1.1.0handle_monod_fn_def_callee", || {
-                    self.handle_monod_fn_def_callee(first_arg_ty, monod_callee)
+                    self.handle_monod_fn_def_callee(call_args, first_arg, first_arg_ty, monod_callee)
                 });
             }
             ty::TyKind::FnPtr(..) => timer::measure("1.0.1.1.1.1handle_monod_fn_ptr_callee", || {
@@ -353,6 +282,8 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     /// Handle monomorphized direct callee
     fn handle_monod_fn_def_callee(
         &mut self,
+        call_args: &[Spanned<mir::Operand<'tcx>>],
+        first_arg_operand: Option<&mir::Operand<'tcx>>,
         first_arg: Option<ty::Ty<'tcx>>,
         monod: ty::Ty<'tcx>,
     ) -> Option<FunctionInstance<'tcx>> {
@@ -382,11 +313,12 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
             Ok(opt_instance) => {
                 if let Some(instance) = opt_instance {
                     debug!("Resolved instance successfully: {:?}", instance);
+                    self.maybe_handle_dyn_fn_adapter_call(call_args, first_arg_operand, first_arg, *def_id);
                     if matches!(instance.def, InstanceKind::Virtual(..)) {
                         // Virtual function call!!!!!
                         debug!("Found trait method call with dyn self: {:?}", monod);
                         timer::measure("fn_def handle_dyn_trait_method_call", || {
-                            self.handle_dyn_trait_method_call(first_arg, *def_id)
+                            self.handle_dyn_trait_method_call(first_arg_operand, first_arg, *def_id)
                         });
                     }
                     return Some(FunctionInstance::new_instance(instance));
@@ -404,12 +336,83 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         None
     }
 
+    fn fallback_callable_on_mono_error(
+        &self,
+        func: &mir::Operand<'tcx>,
+        before_mono_ty: ty::Ty<'tcx>,
+    ) -> Option<FunctionInstance<'tcx>> {
+        if let Some((def_id, _)) = operand_fn_def(func) {
+            tracing::warn!(
+                "Recovered DefId {:?} from operand after monomorphization failure",
+                def_id
+            );
+            return Some(FunctionInstance::new_non_instance(def_id));
+        }
+
+        if let Some(def_id) = fallback_callable_def_id_from_ty(self.tcx, before_mono_ty) {
+            tracing::warn!("Recovered DefId {:?} from type after monomorphization failure", def_id);
+            return Some(FunctionInstance::new_non_instance(def_id));
+        }
+
+        None
+    }
+
+    fn maybe_handle_dyn_fn_adapter_call(
+        &mut self,
+        call_args: &[Spanned<mir::Operand<'tcx>>],
+        first_arg_operand: Option<&mir::Operand<'tcx>>,
+        first_arg: Option<ty::Ty<'tcx>>,
+        def_id: DefId,
+    ) {
+        let requested_kind = match self.tcx.item_name(def_id).as_str() {
+            "call" => Some(ty::ClosureKind::Fn),
+            "call_mut" => Some(ty::ClosureKind::FnMut),
+            "call_once" => Some(ty::ClosureKind::FnOnce),
+            _ => None,
+        };
+        if let Some(kind) = requested_kind {
+            for arg in call_args {
+                let origin_candidates = self.origin_trace_context().resolve_dyn_fn_candidates(&arg.node, kind);
+                if origin_candidates.is_empty() {
+                    continue;
+                }
+                for cand in origin_candidates {
+                    self.callees.push(CallSite::new_with_kind(
+                        *self.caller_instance,
+                        cand,
+                        self.constraints[&self.current_bb].constraints,
+                        CallKind::DynTrait,
+                    ));
+                }
+                return;
+            }
+        }
+
+        let Some((trait_id, _, _, _, _)) =
+            first_arg.and_then(|arg| extract_dyn_trait_info(self.tcx, self.typing_env, arg, def_id))
+        else {
+            return;
+        };
+
+        let li = self.tcx.lang_items();
+        let is_dyn_fn_trait = Some(trait_id) == li.fn_trait()
+            || Some(trait_id) == li.fn_mut_trait()
+            || Some(trait_id) == li.fn_once_trait();
+        if !is_dyn_fn_trait {
+            return;
+        }
+
+        timer::measure("handle_dyn_fn_adapter_call", || {
+            self.handle_dyn_trait_method_call(first_arg_operand, first_arg, def_id)
+        });
+    }
+
     fn handle_monod_fn_ptr_callee(&mut self, func: &mir::Operand<'tcx>, monod: ty::Ty<'tcx>) {
         debug!("First, we try to resolve function pointer directly, func: {:?}", func);
 
         // First, we try to backtrace the local candidates from the function pointer operand.
         let mut local_candidates = timer::measure("resolve_fnptr_local_candidates", || {
-            self.resolve_fnptr_local_candidates(func)
+            self.origin_trace_context().resolve_fnptr_candidates(func)
         });
         if !local_candidates.is_empty() {
             debug!("fnptr call: found {} local cands via backtrace", local_candidates.len());
@@ -456,6 +459,7 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
     /// dyn_trait_ty is the dyn trait type, which is TyKind::Dynamic.
     fn handle_dyn_trait_method_call(
         &mut self,
+        first_arg_operand: Option<&mir::Operand<'tcx>>,
         first_arg: Option<ty::Ty<'tcx>>,
         def_id: DefId,
     ) -> Option<FunctionInstance<'tcx>> {
@@ -466,14 +470,56 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         let fn_mut_trait = li.fn_mut_trait();
         let fn_once_trait = li.fn_once_trait();
 
-        // 提取 trait 信息
-        if let Some((tr_id, method_name, inputs, output)) = self.extract_dyn_trait_info(first_arg, def_id) {
-            debug!("Found dyn trait method: trait={:?}, method={}", tr_id, method_name);
-            let candidates = if Some(tr_id) == fn_trait || Some(tr_id) == fn_mut_trait || Some(tr_id) == fn_once_trait {
-                // if trait is Fn/FnMut/FnOnce, use signature matching
+        if let Some((_tr_id, requested_kind, inputs, output)) =
+            extract_dyn_fn_signature(self.tcx, self.typing_env, first_arg?)
+        {
+            let origin_candidates = first_arg_operand
+                .map(|operand| {
+                    self.origin_trace_context()
+                        .resolve_dyn_fn_candidates(operand, requested_kind)
+                })
+                .unwrap_or_default();
+            let candidates = if origin_candidates.is_empty() {
                 timer::measure("candidates_for_dyn_fn_trait", || {
                     candidates_for_dyn_fn_trait(self.tcx, &inputs, output, self.address_taken_funcs)
                 })
+            } else {
+                origin_candidates
+            };
+            debug!("Found {} candidates for dyn fn trait method", candidates.len());
+
+            for cand in candidates {
+                self.callees.push(CallSite::new_with_kind(
+                    *self.caller_instance,
+                    cand,
+                    self.constraints[&self.current_bb].constraints,
+                    CallKind::DynTrait,
+                ));
+            }
+        }
+        // Extract trait information
+        else if let Some((tr_id, method_name, requested_kind, inputs, output)) =
+            extract_dyn_trait_info(self.tcx, self.typing_env, first_arg?, def_id)
+        {
+            debug!("Found dyn trait method: trait={:?}, method={}", tr_id, method_name);
+            let candidates = if Some(tr_id) == fn_trait || Some(tr_id) == fn_mut_trait || Some(tr_id) == fn_once_trait {
+                let origin_candidates = first_arg_operand
+                    .and_then(|operand| requested_kind.map(|kind| (operand, kind)))
+                    .map(|(operand, kind)| self.origin_trace_context().resolve_dyn_fn_candidates(operand, kind))
+                    .unwrap_or_default();
+                if origin_candidates.is_empty() {
+                    // if trait is Fn/FnMut/FnOnce, use signature matching
+                    timer::measure("candidates_for_dyn_fn_trait", || {
+                        candidates_for_dyn_fn_trait(
+                            self.tcx,
+                            &inputs,
+                            output.unwrap_or(self.tcx.types.unit),
+                            self.address_taken_funcs,
+                        )
+                    })
+                } else {
+                    origin_candidates
+                }
             } else {
                 // for other traits, use trait method dispatch
                 timer::measure("candidates_for_dyn_normal_trait", || {
@@ -496,125 +542,8 @@ impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
         }
         None
     }
-    // extract trait information from dyn Trait type
-    // Note:
-    // The last two return value are the args tuple and output type of the method.
-    // It is valid only when the method is a Fn/FnMut/FnOnce trait method.
-    fn extract_dyn_trait_info(
-        &self,
-        first_arg: Option<ty::Ty<'tcx>>,
-        method_def_id: DefId,
-    ) -> Option<(DefId, String, Vec<ty::Ty<'tcx>>, ty::Ty<'tcx>)> {
-        let arg0 = first_arg?;
-        let typing_env = TypingEnv::post_analysis(self.tcx, self.caller_instance.def_id());
-        let preds = if let Some(ty) = peel_dyn_from_receiver(self.tcx, typing_env, arg0)
-            && let ty::TyKind::Dynamic(preds, _, _) = ty.kind()
-        {
-            preds
-        } else {
-            return None;
-        };
-
-        let li = self.tcx.lang_items();
-        let fn_trait = li.fn_trait();
-        let fn_mut_trait = li.fn_mut_trait();
-        let fn_once_trait = li.fn_once_trait();
-        let output_assoc = li.fn_once_output();
-
-        let mut trait_def_id: Option<DefId> = None;
-        let mut method_name: Option<String> = None;
-        let mut maybe_args_tuple: Option<ty::Ty<'tcx>> = None;
-        let mut maybe_output: Option<ty::Ty<'tcx>> = None;
-
-        for p in preds.iter() {
-            // Erase late-bound lifetimes by normalizing the binder before matching
-            let pred = self.tcx.normalize_erasing_late_bound_regions(typing_env, p);
-            match pred {
-                ty::ExistentialPredicate::Trait(tr) => {
-                    // 检查是否是 Fn/FnMut/FnOnce trait
-                    if let Some(fn_id) = fn_trait {
-                        if tr.def_id == fn_id && tr.args.len() == 1 {
-                            trait_def_id = Some(fn_id);
-                            method_name = Some("call".to_string());
-                            let args_tuple = tr.args.type_at(0);
-                            maybe_args_tuple = Some(args_tuple);
-                        }
-                    }
-                    if let Some(fn_mut_id) = fn_mut_trait {
-                        if tr.def_id == fn_mut_id && tr.args.len() == 1 {
-                            trait_def_id = Some(fn_mut_id);
-                            method_name = Some("call_mut".to_string());
-                            let args_tuple = tr.args.type_at(0);
-                            maybe_args_tuple = Some(args_tuple);
-                        }
-                    }
-                    if let Some(fn_once_id) = fn_once_trait {
-                        if tr.def_id == fn_once_id && tr.args.len() == 1 {
-                            trait_def_id = Some(fn_once_id);
-                            method_name = Some("call_once".to_string());
-                            let args_tuple = tr.args.type_at(0);
-                            maybe_args_tuple = Some(args_tuple);
-                        }
-                    }
-
-                    // 如果不是 Fn trait，则是普通的 trait
-                    // 对于普通 trait，我们可以从 method_def_id 获取真正的方法名
-                    if trait_def_id.is_none() {
-                        trait_def_id = Some(tr.def_id);
-                        // 从 method_def_id 获取方法名
-                        let method_name_str = self.tcx.item_name(method_def_id).to_string();
-                        method_name = Some(method_name_str);
-                    }
-                }
-                ty::ExistentialPredicate::Projection(pr) => {
-                    if let Some(out_id) = output_assoc {
-                        if pr.def_id == out_id {
-                            maybe_output = Some(pr.term.expect_type());
-                        }
-                    }
-                }
-                ty::ExistentialPredicate::AutoTrait(_) => {}
-            }
-        }
-        println!(
-            "Extracted dyn trait info: trait_def_id={:?}, method_name={:?}, args_tuple={:?}, output={:?}",
-            trait_def_id, method_name, maybe_args_tuple, maybe_output
-        );
-        let trait_id = trait_def_id?;
-        let method = method_name?;
-
-        // 对于 Fn traits，我们有完整的签名信息
-        if let (Some(args_tuple), Some(output)) = (maybe_args_tuple, maybe_output) {
-            let inputs = match args_tuple.kind() {
-                ty::TyKind::Tuple(elems) => elems.iter().collect(),
-                _ => return None,
-            };
-            return Some((trait_id, method, inputs, output));
-        }
-
-        // 对于普通 trait，返回基本信息，签名需要从其他地方获取
-        Some((trait_id, method, vec![], self.tcx.types.unit))
-    }
-}
-
-/// Trivial resolve function instance from def_id
-///
-/// This function is used to resolve function instance from def_id
-/// without monomorphization.
-///
-/// # Returns
-/// * `Option<FunctionInstance<'_>>` - FunctionInstance if resolved, None otherwise
-pub(crate) fn trivial_resolve(tcx: ty::TyCtxt<'_>, def_id: DefId) -> Option<FunctionInstance<'_>> {
-    let ty = tcx.type_of(def_id).skip_binder();
-    if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
-        let instance = ty::Instance::try_resolve(tcx, TypingEnv::post_analysis(tcx, def_id), *def_id, args);
-        if let Ok(Some(instance)) = instance {
-            Some(FunctionInstance::new_instance(instance))
-        } else {
-            None
-        }
-    } else {
-        None
+    fn origin_trace_context(&self) -> OriginTraceContext<'tcx, '_> {
+        OriginTraceContext::new(self.tcx, self.caller_body, self.current_bb, self.typing_env)
     }
 }
 
@@ -663,266 +592,4 @@ pub(crate) fn perform_mono_analysis<'tcx>(
     }
 
     call_graph
-}
-
-pub fn monomorphize<'tcx, T>(
-    tcx: TyCtxt<'tcx>,
-    typing_env: TypingEnv<'tcx>,
-    instance: Instance<'tcx>,
-    value: T,
-) -> Result<T, ty::normalize_erasing_regions::NormalizationError<'tcx>>
-where
-    T: TypeFoldable<TyCtxt<'tcx>>,
-{
-    instance.try_instantiate_mir_and_normalize_erasing_regions(tcx, typing_env, ty::EarlyBinder::bind(value))
-}
-
-/// Find function candidates that match the given function pointer signature
-/// FIXME: needs further optimization
-pub(crate) fn candidates_for_fnptr_sig<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller_def_id: DefId,
-    sig: Binder<'tcx, ty::FnSigTys<TyCtxt<'tcx>>>,
-    address_taken_funcs: &HashSet<DefId>,
-) -> Vec<FunctionInstance<'tcx>> {
-    let sig = tcx.normalize_erasing_late_bound_regions(TypingEnv::post_analysis(tcx, caller_def_id), sig);
-    let sig_inputs = sig.inputs();
-    let sig_output = sig.output();
-    let key = sig_key(tcx, sig_inputs, sig_output);
-    let map = FN_SIG_INDEX.lock().unwrap();
-    let list = map.get(&key).cloned().unwrap_or_default();
-    let mut candidates = Vec::new();
-    for def_id in list {
-        if !address_taken_funcs.contains(&def_id) {
-            continue;
-        }
-        if let Some(instance) = trivial_resolve(tcx, def_id) {
-            candidates.push(instance);
-        } else {
-            candidates.push(FunctionInstance::new_non_instance(def_id));
-        }
-    }
-    tracing::debug!(
-        "Found {} candidates for fnptr signature with {} inputs",
-        candidates.len(),
-        sig_inputs.len()
-    );
-    candidates
-}
-
-// FIXME: needs further optimization
-fn candidates_for_dyn_fn_trait<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    inputs: &[ty::Ty<'tcx>],
-    output: ty::Ty<'tcx>,
-    address_taken_funcs: &HashSet<DefId>,
-) -> Vec<FunctionInstance<'tcx>> {
-    let key = sig_key(tcx, inputs, output);
-    let map = FN_SIG_INDEX.lock().unwrap();
-    let list = map.get(&key).cloned().unwrap_or_default();
-    let mut candidates = Vec::new();
-    for def_id in list {
-        if !address_taken_funcs.contains(&def_id) {
-            continue;
-        }
-        match tcx.def_kind(def_id) {
-            def::DefKind::Fn | def::DefKind::AssocFn => {}
-            _ => continue,
-        }
-        if let Some(instance) = trivial_resolve(tcx, def_id) {
-            candidates.push(instance);
-        } else {
-            candidates.push(FunctionInstance::new_non_instance(def_id));
-        }
-    }
-    tracing::debug!(
-        "Found {} candidates for dyn fn signature with {} inputs",
-        candidates.len(),
-        inputs.len()
-    );
-    candidates
-}
-
-// 为 dyn trait 查找候选函数
-fn candidates_for_dyn_normal_trait<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    tr_id: DefId,
-    method_name: &str,
-) -> Vec<FunctionInstance<'tcx>> {
-    // For ordinary traits, find the methods of all types that implement the trait
-    // and supplement the trait's own default implementation (if any) to ensure no omission
-    let mut candidates = Vec::new();
-
-    // Find the default method of the trait (if any)
-    let trait_method_def_id = tcx.associated_item_def_ids(tr_id).iter().find_map(|&item_def_id| {
-        let item = tcx.associated_item(item_def_id);
-        if item.name().to_string() == method_name && matches!(item.kind, ty::AssocKind::Fn { .. }) {
-            Some(item_def_id)
-        } else {
-            None
-        }
-    });
-
-    // Traverse all types that implement the trait
-    let all_impls = tcx.all_impls(tr_id);
-    for impl_def_id in all_impls {
-        // Find the specified method in the impl
-        let mut found_override = false;
-        for &item_def_id in tcx.associated_item_def_ids(impl_def_id) {
-            let item = tcx.associated_item(item_def_id);
-
-            // Check if it's the method we're looking for (impl override)
-            if item.name().to_string() == method_name && matches!(item.kind, ty::AssocKind::Fn { .. }) {
-                found_override = true;
-                if let Some(instance) = trivial_resolve(tcx, item_def_id) {
-                    candidates.push(instance);
-                } else {
-                    candidates.push(FunctionInstance::new_non_instance(item_def_id));
-                }
-            }
-        }
-
-        // 如果该 impl 没有重载该方法，且 trait 有同名方法，则加入 trait 的默认实现
-        if !found_override {
-            if let Some(def_id) = trait_method_def_id {
-                if let Some(instance) = trivial_resolve(tcx, def_id) {
-                    candidates.push(instance);
-                } else {
-                    candidates.push(FunctionInstance::new_non_instance(def_id));
-                }
-            }
-        }
-    }
-
-    tracing::debug!(
-        "Found {} candidates for dyn trait {} method {}",
-        candidates.len(),
-        tcx.def_path_str(tr_id),
-        method_name
-    );
-    candidates
-}
-
-/// 从类型中剥去所有 dyn 包裹，返回最内层的类型
-fn peel_dyn_from_receiver<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    typing_env: TypingEnv<'tcx>,
-    ty: ty::Ty<'tcx>,
-) -> Option<ty::Ty<'tcx>> {
-    match ty.kind() {
-        ty::TyKind::Dynamic(..) => Some(ty),
-
-        // &T / &mut T
-        ty::TyKind::Ref(_, inner, _) => peel_dyn_from_receiver(tcx, typing_env, *inner),
-
-        // *const T / *mut T
-        ty::TyKind::RawPtr(inner, _) => peel_dyn_from_receiver(tcx, typing_env, *inner),
-
-        // Box<T> 特例
-        _ if ty.is_box_global(tcx) => {
-            let inner = ty.expect_boxed_ty();
-            peel_dyn_from_receiver(tcx, typing_env, inner)
-        }
-
-        // 透明 newtype 或通用 ADT 包裹（Pin<T>、Rc<T>、Arc<T>、Cow<'_, T> 等）
-        ty::TyKind::Adt(adt_def, args) => {
-            // 先尝试遍历泛型参数中可能的类型参数
-            for i in 0..args.len() {
-                if let Some(inner) = args[i].as_type() {
-                    if let Some(d) = peel_dyn_from_receiver(tcx, typing_env, inner) {
-                        return Some(d);
-                    }
-                }
-            }
-            // 透明 newtype：沿字段类型继续剥
-            if adt_def.repr().transparent() && !adt_def.is_union() {
-                let variant = adt_def.non_enum_variant();
-                for field in &variant.fields {
-                    let fty = field.ty(tcx, args);
-                    if let Some(d) = peel_dyn_from_receiver(tcx, typing_env, fty) {
-                        return Some(d);
-                    }
-                }
-            }
-            None
-        }
-
-        // 兜底：尝试不定长尾部（某些包装或派生类型能直接剥出 dyn）
-        _ => {
-            let tail = tcx.struct_tail_for_codegen(ty, typing_env);
-            if matches!(tail.kind(), ty::TyKind::Dynamic(..)) {
-                Some(tail)
-            } else {
-                None
-            }
-        }
-    }
-}
-
-impl<'tcx, 'local> SearchFunctionCall<'tcx, 'local> {
-    /// This method do some more precision analysis on the function pointer operand.
-    /// It reversely search in current basic block to find the last assignment to the target local.
-    fn resolve_fnptr_local_candidates(&mut self, func: &mir::Operand<'tcx>) -> Vec<FunctionInstance<'tcx>> {
-        use mir::Operand;
-        use rustc_middle::mir::{Rvalue, StatementKind};
-
-        let mut out = Vec::new();
-        let target_local = match func {
-            Operand::Move(place) | Operand::Copy(place) => place.local,
-            _ => return out,
-        };
-
-        // reversely search in current basic block to find the last assignment to the target local
-        let bb = &self.caller_body.basic_blocks[self.current_bb];
-        let mut follow_local = target_local;
-
-        let mut resolve_and_push = |op: &mir::Operand<'tcx>| -> bool {
-            if let Some((def_id, args)) = op.const_fn_def() {
-                let caller_def_id = self.caller_instance.def_id();
-                let type_env = TypingEnv::post_analysis(self.tcx, caller_def_id);
-                match ty::Instance::try_resolve(self.tcx, type_env, def_id, args) {
-                    Ok(Some(inst)) => out.push(FunctionInstance::new_instance(inst)),
-                    _ => {
-                        if let Some(inst) = trivial_resolve(self.tcx, def_id) {
-                            out.push(inst);
-                        } else {
-                            out.push(FunctionInstance::new_non_instance(def_id));
-                        }
-                    }
-                }
-                // Found!
-                return true;
-            }
-            false
-        };
-
-        for stmt in bb.statements.iter().rev() {
-            if let StatementKind::Assign(assign) = &stmt.kind {
-                let (lhs, rhs) = &**assign;
-                if lhs.local != follow_local {
-                    continue;
-                }
-                match rhs {
-                    Rvalue::Use(op) => {
-                        if resolve_and_push(op) {
-                            break;
-                        }
-                        // 链式复制：继续跟踪新的来源局部
-                        if let Operand::Move(p2) | Operand::Copy(p2) = op {
-                            follow_local = p2.local;
-                            continue;
-                        }
-                    }
-                    Rvalue::Cast(_, op, _ty) => {
-                        if resolve_and_push(op) {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        out
-    }
 }

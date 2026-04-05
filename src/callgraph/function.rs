@@ -110,7 +110,7 @@ where
         }
     };
 
-    // 遍历本地 crate：通过 HIR body owners 筛选函数与关联函数
+    // Traverse local crate: filter functions and associated functions via HIR body owners
     {
         use rustc_hir::def::DefKind;
         for owner in tcx.hir_body_owners() {
@@ -128,7 +128,7 @@ where
         }
     }
 
-    // 遍历外部 crates：使用 exported_symbols 获取可导出的函数/关联函数
+    // Traverse external crates: get exportable functions/associated functions via exported_symbols
     {
         use rustc_hir::def::DefKind;
         for &crate_num in tcx.crates(()) {

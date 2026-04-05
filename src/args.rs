@@ -71,19 +71,19 @@ pub struct CGArgs {
 impl CGArgs {
     /// Convert CGArgs to a HashMap<String, String>
     pub fn to_hash_map(&self) -> FxHashMap<String, String> {
-        // 将结构体序列化为 JSON 值
+        // Serialize struct to JSON value
         let json_value = serde_json::to_value(self).unwrap();
 
-        // 创建一个 HashMap 用于存储结果
+        // Create a HashMap to store results
         let mut map = FxHashMap::default();
 
-        // 遍历 JSON 值的键值对
+        // Iterate over JSON key-value pairs
         if let Value::Object(obj) = json_value {
             for (key, value) in obj {
-                // 将每个值转换为字符串
+                // Convert each value to string
                 let string_value = match value {
-                    Value::String(s) => s,  // 直接使用字符串值
-                    _ => value.to_string(), // 其他类型默认转换
+                    Value::String(s) => s,  // Use string value directly
+                    _ => value.to_string(), // Default conversion for other types
                 };
                 map.insert(key, string_value);
             }

@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::Write;
 
 pub fn analyze_public_exposure<'tcx>(call_graph: &CallGraph<'tcx>, tcx: TyCtxt<'tcx>, args: &CGArgs) {
-    tracing::info!("Starting RQ2: Public Exposure Analysis");
+    tracing::info!("Starting public exposure analysis");
 
     let mut targets = HashSet::new();
 
@@ -32,25 +32,26 @@ pub fn analyze_public_exposure<'tcx>(call_graph: &CallGraph<'tcx>, tcx: TyCtxt<'
         let callee = call_site.callee();
 
         if has_targets {
-            if target_patterns.iter().any(|p| {
-                crate::callgraph::utils::matches_function_path(tcx, callee, p, args.without_args)
-            }) {
+            if target_patterns
+                .iter()
+                .any(|p| crate::callgraph::utils::matches_function_path(tcx, callee, p, args.without_args))
+            {
                 targets.insert(callee);
             }
-            if target_patterns.iter().any(|p| {
-                crate::callgraph::utils::matches_function_path(tcx, caller, p, args.without_args)
-            }) {
+            if target_patterns
+                .iter()
+                .any(|p| crate::callgraph::utils::matches_function_path(tcx, caller, p, args.without_args))
+            {
                 targets.insert(caller);
             }
         }
-
 
         call_map.entry(caller).or_default().push(callee);
         reverse_call_map.entry(callee).or_default().push(caller);
     }
 
     if !has_targets {
-        tracing::warn!("RQ2 public exposure: no targets specified (find_callers empty)");
+        tracing::warn!("Public exposure analysis: no targets specified (find_callers empty)");
     }
 
     let mut discovered = HashSet::new();
@@ -70,9 +71,10 @@ pub fn analyze_public_exposure<'tcx>(call_graph: &CallGraph<'tcx>, tcx: TyCtxt<'
 
     if has_targets {
         for &f in &discovered {
-            if target_patterns.iter().any(|p| {
-                crate::callgraph::utils::matches_function_path(tcx, f, p, args.without_args)
-            }) {
+            if target_patterns
+                .iter()
+                .any(|p| crate::callgraph::utils::matches_function_path(tcx, f, p, args.without_args))
+            {
                 targets.insert(f);
             }
         }
@@ -175,35 +177,28 @@ pub fn analyze_public_exposure<'tcx>(call_graph: &CallGraph<'tcx>, tcx: TyCtxt<'
     let public_entry_fanin_median = median_usize_as_f64(&mut public_entry_fanin_samples);
     let public_entry_fanin_p95 = pctl_usize(&mut public_entry_fanin_samples, 0.95);
 
-    let public_entry_fanin_mean_over_public_targets =
-        if public_entry_fanin_samples_over_public.is_empty() {
-            0.0
-        } else {
-            public_entry_fanin_samples_over_public.iter().sum::<usize>() as f64
-                / public_entry_fanin_samples_over_public.len() as f64
-        };
+    let public_entry_fanin_mean_over_public_targets = if public_entry_fanin_samples_over_public.is_empty() {
+        0.0
+    } else {
+        public_entry_fanin_samples_over_public.iter().sum::<usize>() as f64
+            / public_entry_fanin_samples_over_public.len() as f64
+    };
 
     let min_public_distance_mean_over_public_targets = if min_public_distance_samples.is_empty() {
         0.0
     } else {
-        min_public_distance_samples.iter().sum::<usize>() as f64
-            / min_public_distance_samples.len() as f64
+        min_public_distance_samples.iter().sum::<usize>() as f64 / min_public_distance_samples.len() as f64
     };
-    let min_public_distance_median_over_public_targets =
-        median_usize_as_f64(&mut min_public_distance_samples);
-    let min_public_distance_p95_over_public_targets =
-        pctl_usize(&mut min_public_distance_samples, 0.95);
+    let min_public_distance_median_over_public_targets = median_usize_as_f64(&mut min_public_distance_samples);
+    let min_public_distance_p95_over_public_targets = pctl_usize(&mut min_public_distance_samples, 0.95);
 
     let encapsulation_depth_mean_over_public_targets = if encapsulation_depth_samples.is_empty() {
         0.0
     } else {
-        encapsulation_depth_samples.iter().sum::<usize>() as f64
-            / encapsulation_depth_samples.len() as f64
+        encapsulation_depth_samples.iter().sum::<usize>() as f64 / encapsulation_depth_samples.len() as f64
     };
-    let encapsulation_depth_median_over_public_targets =
-        median_usize_as_f64(&mut encapsulation_depth_samples);
-    let encapsulation_depth_p95_over_public_targets =
-        pctl_usize(&mut encapsulation_depth_samples, 0.95);
+    let encapsulation_depth_median_over_public_targets = median_usize_as_f64(&mut encapsulation_depth_samples);
+    let encapsulation_depth_p95_over_public_targets = pctl_usize(&mut encapsulation_depth_samples, 0.95);
 
     public_exposure_details.sort_by(|a, b| {
         let da = a.get("distance").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
@@ -214,7 +209,7 @@ pub fn analyze_public_exposure<'tcx>(call_graph: &CallGraph<'tcx>, tcx: TyCtxt<'
 
     let result = json!({
         "crate_name": tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string(),
-        "rq2_public_exposure": {
+        "public_exposure": {
             "total_targets": total_targets,
             "public_reachable_targets": public_reachable_targets,
             "public_reachability_rate": public_reachability_rate,
@@ -242,19 +237,18 @@ pub fn analyze_public_exposure<'tcx>(call_graph: &CallGraph<'tcx>, tcx: TyCtxt<'
     }
 
     let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string();
-    let output_path = output_dir.join(format!("{}-rq2-public-exposure.json", crate_name));
+    let output_path = output_dir.join(format!("{}-public-exposure.json", crate_name));
 
     match File::create(&output_path) {
         Ok(mut file) => {
             if let Err(e) = write!(file, "{}", serde_json::to_string_pretty(&result).unwrap()) {
-                tracing::error!("Failed to write RQ2 results to file: {}", e);
+                tracing::error!("Failed to write public exposure results to file: {}", e);
             } else {
-                tracing::info!("RQ2 results written to {}", output_path.display());
+                tracing::info!("Public exposure results written to {}", output_path.display());
             }
         }
         Err(e) => {
-            tracing::error!("Failed to create RQ2 output file: {}", e);
+            tracing::error!("Failed to create public exposure output file: {}", e);
         }
     }
 }
-
