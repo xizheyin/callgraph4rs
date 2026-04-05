@@ -19,13 +19,7 @@ pub(crate) fn candidates_for_fnptr_sig<'tcx>(
     let key = sig_key(tcx, sig_inputs, sig_output);
     let mut candidates = def_ids_to_instances(tcx, &def_ids_for_sig_key(&key), address_taken_funcs);
     if candidates.is_empty() {
-        candidates = candidates_for_fnptr_sig_loose(
-            tcx,
-            caller_def_id,
-            sig_inputs,
-            sig_output,
-            address_taken_funcs,
-        );
+        candidates = candidates_for_fnptr_sig_loose(tcx, caller_def_id, sig_inputs, sig_output, address_taken_funcs);
     }
     tracing::debug!(
         "Found {} candidates for fnptr signature with {} inputs",

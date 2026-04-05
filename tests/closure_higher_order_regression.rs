@@ -9,7 +9,11 @@ fn analyzed_test1_output() -> &'static std::path::PathBuf {
     TEST1_OUTPUT_DIR.get_or_init(|| {
         let manifest_path = manifest_path("testdata/test1/Cargo.toml");
         let output_dir = unique_output_dir("cg4rs-closure-higher-order");
-        run_call_cg4rs(&manifest_path, &output_dir, "fn_trait_example::inc,fn_trait_example::add_offset");
+        run_call_cg4rs(
+            &manifest_path,
+            &output_dir,
+            "fn_trait_example::inc,fn_trait_example::add_offset",
+        );
         output_dir
     })
 }

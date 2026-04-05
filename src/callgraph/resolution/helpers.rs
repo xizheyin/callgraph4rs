@@ -15,11 +15,7 @@ pub fn monomorphize<'tcx, T>(
 where
     T: TypeFoldable<TyCtxt<'tcx>>,
 {
-    instance.try_instantiate_mir_and_normalize_erasing_regions(
-        tcx,
-        typing_env,
-        ty::EarlyBinder::bind(value),
-    )
+    instance.try_instantiate_mir_and_normalize_erasing_regions(tcx, typing_env, ty::EarlyBinder::bind(value))
 }
 
 /// Trivially resolve a DefId to a FunctionInstance
@@ -33,12 +29,7 @@ where
 pub(crate) fn trivial_resolve(tcx: TyCtxt<'_>, def_id: DefId) -> Option<FunctionInstance<'_>> {
     let ty = tcx.type_of(def_id).skip_binder();
     if let ty::TyKind::FnDef(def_id, args) = ty.kind() {
-        let instance = ty::Instance::try_resolve(
-            tcx,
-            TypingEnv::post_analysis(tcx, def_id),
-            *def_id,
-            args,
-        );
+        let instance = ty::Instance::try_resolve(tcx, TypingEnv::post_analysis(tcx, def_id), *def_id, args);
         if let Ok(Some(instance)) = instance {
             Some(FunctionInstance::new_instance(instance))
         } else {
@@ -50,10 +41,7 @@ pub(crate) fn trivial_resolve(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Function
 }
 
 /// Extract callable DefId from a type, recursively unwrapping references and pointers
-pub(crate) fn fallback_callable_def_id_from_ty<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    ty: ty::Ty<'tcx>,
-) -> Option<DefId> {
+pub(crate) fn fallback_callable_def_id_from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> Option<DefId> {
     match ty.kind() {
         ty::TyKind::FnDef(def_id, _) => Some(*def_id),
         ty::TyKind::Closure(def_id, _) => Some(*def_id),
@@ -65,9 +53,7 @@ pub(crate) fn fallback_callable_def_id_from_ty<'tcx>(
 }
 
 /// Extract function definition from an operand
-pub(crate) fn operand_fn_def<'tcx>(
-    operand: &mir::Operand<'tcx>,
-) -> Option<(DefId, ty::GenericArgsRef<'tcx>)> {
+pub(crate) fn operand_fn_def<'tcx>(operand: &mir::Operand<'tcx>) -> Option<(DefId, ty::GenericArgsRef<'tcx>)> {
     match operand {
         mir::Operand::Constant(c) => match c.ty().kind() {
             ty::TyKind::FnDef(def_id, args) => Some((*def_id, *args)),

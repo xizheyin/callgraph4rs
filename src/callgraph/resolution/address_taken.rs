@@ -93,11 +93,7 @@ pub(crate) fn build_fn_sig_index<'tcx>(tcx: TyCtxt<'tcx>, address_taken_funcs: &
 
 /// Generate a normalized signature key for function indexing.
 /// Used internally by fnptr resolution to match function signatures.
-pub(super) fn sig_key<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    inputs: &[ty::Ty<'tcx>],
-    output: ty::Ty<'tcx>,
-) -> (usize, String) {
+pub(super) fn sig_key<'tcx>(tcx: TyCtxt<'tcx>, inputs: &[ty::Ty<'tcx>], output: ty::Ty<'tcx>) -> (usize, String) {
     let erased_out = tcx.erase_regions(output);
     let mut key = format!("{:?}", erased_out);
     for input in inputs {
